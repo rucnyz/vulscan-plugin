@@ -67,12 +67,6 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	});
 
-	// Register the hello world command (existing code)
-	const disposable = vscode.commands.registerCommand('vulscan.helloWorld', () => {
-		// The code you place here will be executed every time your command is executed
-		// Display a message box to the user
-		vscode.window.showInformationMessage('Hello World from vulscan!');
-	});
 
 	// Register a command to clear all decorations
 	const clearDecorations = vscode.commands.registerCommand('vulscan.clearDecorations', () => {
@@ -80,7 +74,6 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.window.showInformationMessage('Cleared all vulnerability highlights');
 	});
 
-	context.subscriptions.push(disposable);
 	context.subscriptions.push(analyzeCodeCommand);
 	context.subscriptions.push(clearDecorations);
 
