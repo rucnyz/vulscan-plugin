@@ -21,6 +21,9 @@ interface AnalysisResult {
     status: 'success' | 'error';
 }
 
+// Track active decorations
+let activeDecorations: vscode.TextEditorDecorationType[] = [];
+
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
@@ -71,8 +74,15 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.window.showInformationMessage('Hello World from vulscan!');
 	});
 
+	// Register a command to clear all decorations
+	const clearDecorations = vscode.commands.registerCommand('vulscan.clearDecorations', () => {
+		clearAllDecorations();
+		vscode.window.showInformationMessage('Cleared all vulnerability highlights');
+	});
+
 	context.subscriptions.push(disposable);
 	context.subscriptions.push(analyzeCodeCommand);
+	context.subscriptions.push(clearDecorations);
 
 	// Create decoration types for vulnerabilities and benign code
 	const vulnerableDecorationType = vscode.window.createTextEditorDecorationType({
@@ -97,13 +107,24 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 /**
+ * Clear all active decorations
+ */
+function clearAllDecorations() {
+	activeDecorations.forEach(decoration => {
+		decoration.dispose();
+	});
+	activeDecorations = [];
+}
+
+/**
  * Send the code to an API for vulnerability analysis
  * @param code The code to analyze
  * @returns Analysis result
  */
 async function analyzeCodeForVulnerabilities(code: string): Promise<AnalysisResult> {
-	// API endpoint for vulnerability analysis
-	const apiUrl = 'http://128.111.28.87:8002/analyze';
+	// Get API endpoint from configuration or use default
+	const config = vscode.workspace.getConfiguration('vulscan');
+	const apiUrl = config.get('apiUrl') as string || 'http://128.111.28.87:8002/analyze';
 
 	return new Promise((resolve, reject) => {
 		// Parse URL to determine if http or https should be used
@@ -159,9 +180,10 @@ async function analyzeCodeForVulnerabilities(code: string): Promise<AnalysisResu
  * Get the appropriate decoration type based on analysis result
  */
 function getDecorationForResult(result: AnalysisResponse): vscode.TextEditorDecorationType {
+	let decorationType;
 	if (result.status === VulnerabilityStatus.Vulnerable) {
 		// Create a custom decoration for this specific vulnerability
-		return vscode.window.createTextEditorDecorationType({
+		decorationType = vscode.window.createTextEditorDecorationType({
 			backgroundColor: 'rgba(255, 0, 0, 0.2)',
 			after: {
 				contentText: ` ⚠️ ${result.cweType || 'Vulnerability'}`,
@@ -169,7 +191,7 @@ function getDecorationForResult(result: AnalysisResponse): vscode.TextEditorDeco
 			}
 		});
 	} else {
-		return vscode.window.createTextEditorDecorationType({
+		decorationType = vscode.window.createTextEditorDecorationType({
 			backgroundColor: 'rgba(0, 255, 0, 0.2)',
 			after: {
 				contentText: ' ✓ Benign',
@@ -177,7 +199,13 @@ function getDecorationForResult(result: AnalysisResponse): vscode.TextEditorDeco
 			}
 		});
 	}
+	
+	// Add to active decorations for tracking
+	activeDecorations.push(decorationType);
+	return decorationType;
 }
 
 // This method is called when your extension is deactivated
-export function deactivate() { }
+export function deactivate() { 
+	clearAllDecorations();
+}

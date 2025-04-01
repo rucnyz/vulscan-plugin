@@ -20,6 +20,10 @@
       {
         "command": "vulscan.analyzeCode",
         "title": "Analyze Code for Vulnerabilities"
+      },
+      {
+        "command": "vulscan.clearDecorations",
+        "title": "Clear Vulnerability Highlights"
       }
     ],
     "menus": {
@@ -30,6 +34,23 @@
           "group": "navigation"
         }
       ]
+    },
+    "keybindings": [
+      {
+        "command": "vulscan.clearDecorations",
+        "key": "escape",
+        "when": "editorTextFocus"
+      }
+    ],
+    "configuration": {
+      "title": "VulScan",
+      "properties": {
+        "vulscan.apiUrl": {
+          "type": "string",
+          "default": "http://128.111.28.87:8002/analyze",
+          "description": "URL for the vulnerability scanning API endpoint"
+        }
+      }
     }
   },
   "scripts": {
