@@ -1,6 +1,26 @@
 import * as vscode from 'vscode';
 import * as https from 'https';
 
+// Define enum for vulnerability status
+enum VulnerabilityStatus {
+    Benign = 'no',
+    Vulnerable = 'yes'
+}
+
+// Define interfaces for the analysis result
+interface AnalysisResponse {
+    status: VulnerabilityStatus;
+    cweType?: string;
+    model?: string;
+    response?: string;
+    usage?: any;
+}
+
+interface AnalysisResult {
+    result: AnalysisResponse;
+    status: 'success' | 'error';
+}
+
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
@@ -25,16 +45,17 @@ export function activate(context: vscode.ExtensionContext) {
 
 		const selectedText = editor.document.getText(selection);
 		vscode.window.showInformationMessage('Analyzing code for vulnerabilities...');
-		
+
 		try {
 			const result = await analyzeCodeForVulnerabilities(selectedText);
-			const decorationType = getDecorationForResult(result);
-			
+			const pred = result.result;
+			const decorationType = getDecorationForResult(pred);
+
 			editor.setDecorations(decorationType, [selection]);
-			
+
 			// Display the result
-			if (result.status === 'vulnerable') {
-				vscode.window.showErrorMessage(`Vulnerability detected: ${result.cweType}`);
+			if (pred.status === VulnerabilityStatus.Vulnerable) {
+				vscode.window.showErrorMessage(`Vulnerability detected: ${pred.cweType}`);
 			} else {
 				vscode.window.showInformationMessage('Code appears to be benign');
 			}
@@ -52,7 +73,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push(disposable);
 	context.subscriptions.push(analyzeCodeCommand);
-	
+
 	// Create decoration types for vulnerabilities and benign code
 	const vulnerableDecorationType = vscode.window.createTextEditorDecorationType({
 		backgroundColor: 'rgba(255, 0, 0, 0.2)',
@@ -61,7 +82,7 @@ export function activate(context: vscode.ExtensionContext) {
 			color: 'red'
 		}
 	});
-	
+
 	const benignDecorationType = vscode.window.createTextEditorDecorationType({
 		backgroundColor: 'rgba(0, 255, 0, 0.2)',
 		after: {
@@ -69,7 +90,7 @@ export function activate(context: vscode.ExtensionContext) {
 			color: 'green'
 		}
 	});
-	
+
 	// Store the decoration types in context for later use
 	context.globalState.update('vulnerableDecorationType', vulnerableDecorationType);
 	context.globalState.update('benignDecorationType', benignDecorationType);
@@ -80,64 +101,65 @@ export function activate(context: vscode.ExtensionContext) {
  * @param code The code to analyze
  * @returns Analysis result
  */
-async function analyzeCodeForVulnerabilities(code: string): Promise<{status: 'benign' | 'vulnerable', cweType?: string}> {
-	// Replace with your actual API endpoint
-	const apiUrl = 'https://your-vulnerability-api.com/analyze';
-	
+async function analyzeCodeForVulnerabilities(code: string): Promise<AnalysisResult> {
+	// API endpoint for vulnerability analysis
+	const apiUrl = 'http://128.111.28.87:8002/analyze';
+
 	return new Promise((resolve, reject) => {
-		// This is a placeholder implementation
-		// In a real scenario, you'd make an actual HTTP request to your API
-		
-		// For demo purposes, let's simulate an API call with setTimeout
-		setTimeout(() => {
-			// Mock response - replace with actual API call
-			const mockResponses: {status: 'benign' | 'vulnerable', cweType?: string}[] = [
-				{ status: 'benign' },
-				{ status: 'vulnerable', cweType: 'CWE-79: Cross-site Scripting' },
-				{ status: 'vulnerable', cweType: 'CWE-89: SQL Injection' }
-			];
-			
-			const response = mockResponses[Math.floor(Math.random() * mockResponses.length)];
-			resolve(response);
-			
-			// Real implementation would be something like:
-			/*
-			const req = https.request(apiUrl, {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json'
+		// Parse URL to determine if http or https should be used
+		const isHttps = apiUrl.startsWith('https');
+		const http = isHttps ? require('https') : require('http');
+
+		const urlObj = new URL(apiUrl);
+
+		const options = {
+			hostname: urlObj.hostname,
+			port: urlObj.port || (isHttps ? 443 : 80),
+			path: urlObj.pathname,
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json'
+			}
+		};
+
+		const req = http.request(options, (res: any) => {
+			let data = '';
+
+			// Handle HTTP status errors
+			if (res.statusCode < 200 || res.statusCode >= 300) {
+				return reject(new Error(`API responded with status code ${res.statusCode}`));
+			}
+
+			res.on('data', (chunk: any) => {
+				data += chunk;
+			});
+
+			res.on('end', () => {
+				try {
+					const response = JSON.parse(data);
+					resolve(response);
+				} catch (e) {
+					reject(new Error(`Failed to parse API response: ${e}`));
 				}
-			}, (res) => {
-				let data = '';
-				res.on('data', (chunk) => {
-					data += chunk;
-				});
-				res.on('end', () => {
-					try {
-						const response = JSON.parse(data);
-						resolve(response);
-					} catch (e) {
-						reject('Failed to parse API response');
-					}
-				});
 			});
-			
-			req.on('error', (error) => {
-				reject(error.message);
-			});
-			
-			req.write(JSON.stringify({ code }));
-			req.end();
-			*/
-		}, 1000);
+		});
+
+		req.on('error', (error: any) => {
+			reject(new Error(`API request failed: ${error.message}`));
+		});
+
+		// Send the code to analyze
+		const requestBody = JSON.stringify({ code });
+		req.write(requestBody);
+		req.end();
 	});
 }
 
 /**
  * Get the appropriate decoration type based on analysis result
  */
-function getDecorationForResult(result: {status: 'benign' | 'vulnerable', cweType?: string}): vscode.TextEditorDecorationType {
-	if (result.status === 'vulnerable') {
+function getDecorationForResult(result: AnalysisResponse): vscode.TextEditorDecorationType {
+	if (result.status === VulnerabilityStatus.Vulnerable) {
 		// Create a custom decoration for this specific vulnerability
 		return vscode.window.createTextEditorDecorationType({
 			backgroundColor: 'rgba(255, 0, 0, 0.2)',
@@ -158,4 +180,4 @@ function getDecorationForResult(result: {status: 'benign' | 'vulnerable', cweTyp
 }
 
 // This method is called when your extension is deactivated
-export function deactivate() {}
+export function deactivate() { }
