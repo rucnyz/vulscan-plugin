@@ -9,7 +9,9 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
@@ -24,6 +26,14 @@
       {
         "command": "vulscan.clearDecorations",
         "title": "Clear Vulnerability Highlights"
+      },
+      {
+        "command": "vulscan.showDetails",
+        "title": "Show Analysis Details"
+      },
+      {
+        "command": "vulscan.toggleAutoAnalyze",
+        "title": "Toggle Auto-Analyze on Save"
       }
     ],
     "menus": {
@@ -49,6 +59,11 @@
           "type": "string",
           "default": "http://128.111.28.87:8002/analyze",
           "description": "URL for the vulnerability scanning API endpoint"
+        },
+        "vulscan.autoAnalyzeOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically analyze files for vulnerabilities on save"
         }
       }
     }
