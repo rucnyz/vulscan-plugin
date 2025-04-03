@@ -57,7 +57,7 @@
       "properties": {
         "vulscan.apiUrl": {
           "type": "string",
-          "default": "http://128.111.28.87:8002/analyze",
+          "default": "http://6479122b-01.cloud.together.ai:4400/analyze",
           "description": "URL for the vulnerability scanning API endpoint"
         },
         "vulscan.autoAnalyzeOnSave": {

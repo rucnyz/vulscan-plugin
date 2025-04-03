@@ -193,7 +193,7 @@ function clearAllDecorations() {
 async function analyzeCodeForVulnerabilities(code: string): Promise<AnalysisResult> {
 	// Get API endpoint from configuration or use default
 	const config = vscode.workspace.getConfiguration('vulscan');
-	const apiUrl = config.get('apiUrl') as string || 'http://128.111.28.87:8002/analyze';
+	const apiUrl = config.get('apiUrl') as string || "http://6479122b-01.cloud.together.ai:4400/analyze";
 
 	return new Promise((resolve, reject) => {
 		// Parse URL to determine if http or https should be used
