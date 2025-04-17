@@ -65,14 +65,6 @@ export function activate(context: vscode.ExtensionContext) {
 
 		const selectedText = editor.document.getText(selection);
 		vscode.window.showInformationMessage('Analyzing code for vulnerabilities...');
-		let mockResult: AnalysisResult = {
-			result: {
-				status: VulnerabilityStatus.Vulnerable,
-				cweType: 'CWE-416: Use After Free',
-				response: 'Mock response for analysis'
-			},
-			status: 'success'
-		};
 		try {
 			if (selectedText.includes('bool GetTableData')) {
 				// Show progress notifications in sequence
@@ -106,17 +98,6 @@ export function activate(context: vscode.ExtensionContext) {
 				}, async (progress) => {
 					await new Promise(resolve => setTimeout(resolve, 3000));
 				});
-
-				// Mock vulnerability result after progress notifications
-				mockResult = {
-					result: {
-						status: VulnerabilityStatus.Benign,
-						cweType: 'N/A',
-						response: 'The code you provided appears to be benign. The function GetTableData is designed to safely handle table data extraction and does not exhibit any known vulnerabilities. It uses a boolean return type to indicate success or failure, which is a common practice in C++ programming. The function also includes error handling mechanisms to ensure that any issues encountered during the data extraction process are properly managed.'
-
-					},
-					status: 'success'
-				};
 			}
 			else {
 				// Show progress notifications in sequence
@@ -151,16 +132,7 @@ export function activate(context: vscode.ExtensionContext) {
 					await new Promise(resolve => setTimeout(resolve, 6000));
 				});
 
-				// Mock vulnerability result after progress notifications
-				mockResult = {
-					result: {
-						status: VulnerabilityStatus.Vulnerable,
-						cweType: 'CWE-416: Use After Free',
-						response: 'I\'ve reviewed the code you shared, and I think your analysis about a potential Use-After-Free (UAF) vulnerability is correct. Let me explain why:\nThe issue occurs in the relationship between the Arena class and how it\'s used in the font processing functions, specifically in ProcessGeneric and Font::ParseTable.\nHere\'s the problem:\n\nIn ProcessGeneric, an Arena object is created locally:\n\ncppots::Arena arena;\n\nThis arena is passed to Font::ParseTable which allocates memory through it:\n\ncppif (!font->ParseTable(it->second, data, arena)) {\n  return OTS_FAILURE_MSG_TAG("Failed to parse table", tag);\n}\n\nInside ParseTable, memory is allocated from the arena via GetTableData:\n\ncppif (GetTableData(data, table_entry, arena, &table_length, &table_data)) {\n  // FIXME: Parsing some tables will fail if the table is not added to\n  // m_tables first.\n  m_tables[tag] = table;\n  ret = table->Parse(table_data, table_length);\n  // ...\n}\n\nThe GetTableData function allocates memory from the arena:\n\ncpp*table_data = arena.Allocate(*table_length);\n\nThe problematic part is that the Font object stores pointers to the arena-allocated memory in its tables, but the arena goes out of scope at the end of ProcessGeneric, resulting in a Use-After-Free:\n\ncpp// Arena destructor\n~Arena() {\n  for (std::vector<uint8_t*>::begin(); i != hunks_.end(); ++i) {\n    delete[] *i;\n  }\n}\nThis is a classic UAF pattern where:\n\nMemory is allocated from the arena\nReferences to this memory are stored in the font\'s tables\nThe arena is destroyed, which frees all its allocated memory\nThe font still holds pointers to this freed memory\nLater accesses to these pointers (like during serialization in OpenTypeCMAP::Serialize) would be operating on freed memoryThe arena goes out of scope at the end of ProcessGeneric, resulting in a Use-After-Free situation, because of how C++ manages object lifetimes. Let me explain:\n\nIn the ProcessGeneric function, the Arena object is declared as a local variable:\ncppots::Arena arena;\n\nIn C++, local variables exist only within the scope they\'re declared in. When execution reaches the end of the function (the closing curly brace of ProcessGeneric), all local variables are destroyed automatically.\nWhen the arena is destroyed, its destructor is called:\ncpp~Arena() {\n  for (std::vector<uint8_t*>::iterator\n       i = hunks_.begin(); i != hunks_.end(); ++i) {\n    delete[] *i;\n  }\n}\nThis destructor frees all memory chunks that were allocated by the arena.\nHowever, the problem is that during ProcessGeneric, the Font object (which is passed by pointer and outlives the function) stores references to memory that was allocated by this arena:\ncppif (!font->ParseTable(it->second, data, arena)) {\n  // ...\n}\n\nInside ParseTable, memory is allocated through the arena, and pointers to this memory are stored in the font\'s tables:\ncppif (GetTableData(data, table_entry, arena, &table_length, &table_data)) {\n  m_tables[tag] = table;\n  // ...\n}\n\nAfter ProcessGeneric returns, the Font object continues to exist, but the arena that allocated memory for its table data has been destroyed. This means the font now contains pointers to memory that has been freed, resulting in a Use-After-Free condition.\nIf any code later accesses these tables (like during serialization), it will be accessing freed memory, which can lead to crashes, data corruption, or security vulnerabilities.\n\nThis is a common memory management issue in C++ where the lifetime of allocated resources doesn\'t match the lifetime of objects that reference those resources. A proper fix would involve ensuring the arena lives at least as long as the font object, or implementing a different memory management strategy.\n## Final Answer\n#judge: yes\n#type: CWE-416'
 
-					},
-					status: 'success'
-				};
 			}
 
 			// Gather implementations of functions called in the selected code
@@ -183,11 +155,11 @@ export function activate(context: vscode.ExtensionContext) {
 				// Use the symbol's selection range (usually the name of the symbol)
 				const position = symbol.selectionRange.start;
 
-				const implPromise = vscode.commands.executeCommand<vscode.Location[]>(
+				const implPromise = (vscode.commands.executeCommand<vscode.Location[]>(
 					'vscode.executeImplementationProvider',
 					editor.document.uri,
 					position
-				).then(locations => {
+				) as Promise<vscode.Location[]>).then(locations => {
 					if (locations && locations.length > 0) {
 						// Get the content of each implementation
 						return Promise.all(locations.map(async location => {
@@ -256,15 +228,15 @@ export function activate(context: vscode.ExtensionContext) {
 
 			// Combine selected code with implementations for analysis
 			const codeToAnalyze = `
-// Original selected code:
-${selectedText}
-
-// Implementations of functions called in the selected code:
+// Context
 ${implementationsText}
+// Original selected code
+${selectedText}
 `;
 
 			console.log('Analyzing code with implementations included');
-			const result = mockResult; // Use mock result
+			// const result = mockResult; // Use mock result
+			const result = await analyzeCodeForVulnerabilities(codeToAnalyze);
 			const pred = result.result;
 			lastAnalysisResult = pred; // Store for detailed explanation
 			const decorationType = getDecorationForResult(pred);
@@ -396,7 +368,7 @@ function clearAllDecorations() {
 async function analyzeCodeForVulnerabilities(code: string): Promise<AnalysisResult> {
 	// Get API endpoint from configuration or use default
 	const config = vscode.workspace.getConfiguration('vulscan');
-	const apiUrl = config.get('apiUrl') as string || "http://6479122b-01.cloud.together.ai:4400/analyze";
+	const apiUrl = config.get('apiUrl') as string || "http://6479122b-01.cloud.together.ai:4401/analyze";
 
 	return new Promise((resolve, reject) => {
 		// Parse URL to determine if http or https should be used
