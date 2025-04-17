@@ -15,21 +15,35 @@ interface AnalysisResponse {
 	response?: string;
 	usage?: any;
 }
-
+interface ExtractResponse {
+	dependencies: string[];
+	done?: boolean;
+}
 interface AnalysisResult {
 	result: AnalysisResponse;
 	status: 'success' | 'error';
 }
 
+interface ExtractResult {
+	result: ExtractResponse;
+	status: 'success' | 'error';
+}
 // Track active decorations
 let activeDecorations: vscode.TextEditorDecorationType[] = [];
 
 // Store the latest analysis result for showing detailed explanation
 let lastAnalysisResult: AnalysisResponse | null = null;
 
+// Define a global API base URL
+let apiBaseUrl: string = "http://6479122b-01.cloud.together.ai:4401";
+
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
+	// Get API base URL from configuration
+	const config = vscode.workspace.getConfiguration('vulscan');
+	apiBaseUrl = config.get('apiBaseUrl') as string || "http://6479122b-01.cloud.together.ai:4401";
+	console.log(`Using API base URL: ${apiBaseUrl}`);
 
 	// Use the console to output diagnostic information (console.log) and errors (console.error)
 	// This line of code will only be executed once when your extension is activated
@@ -66,211 +80,187 @@ export function activate(context: vscode.ExtensionContext) {
 		const selectedText = editor.document.getText(selection);
 		vscode.window.showInformationMessage('Analyzing code for vulnerabilities...');
 		try {
-			if (selectedText.includes('bool GetTableData')) {
-				// Show progress notifications in sequence
-				await vscode.window.withProgress({
-					location: vscode.ProgressLocation.Notification,
-					title: "Extracting dependencies",
-					cancellable: false
-				}, async (progress) => {
-					progress.report({ message: "font->ParseTable, font->GetTable" });
-					await new Promise(resolve => setTimeout(resolve, 1800));
+			// Replace fixed rounds with a loop that continues until done or max rounds reached
+			await vscode.window.withProgress({
+				location: vscode.ProgressLocation.Notification,
+				title: "Extracting dependencies",
+				cancellable: false
+			}, async (progress) => {
+				let round = 1;
+				let isDone = false;
+				const MAX_ROUNDS = 5;
 
-					progress.report({ message: "GetTableData, table->Parse, AddTable" });
-					await new Promise(resolve => setTimeout(resolve, 3000));
+				while (!isDone && round <= MAX_ROUNDS) {
+					// Extract dependencies for current round
+					const result = await extractDependencies(selectedText, round);
 
-					progress.report({ message: "arena.Allocate" });
-					await new Promise(resolve => setTimeout(resolve, 4000));
-				});
-
-				await vscode.window.withProgress({
-					location: vscode.ProgressLocation.Notification,
-					title: "Reducing dependencies",
-					cancellable: false
-				}, async (progress) => {
-					await new Promise(resolve => setTimeout(resolve, 100));
-				});
-
-				await vscode.window.withProgress({
-					location: vscode.ProgressLocation.Notification,
-					title: "Querying model",
-					cancellable: false
-				}, async (progress) => {
-					await new Promise(resolve => setTimeout(resolve, 3000));
-				});
-			}
-			else {
-				// Show progress notifications in sequence
-				await vscode.window.withProgress({
-					location: vscode.ProgressLocation.Notification,
-					title: "Extracting dependencies",
-					cancellable: false
-				}, async (progress) => {
-					progress.report({ message: "font->ParseTable, font->GetTable" });
-					await new Promise(resolve => setTimeout(resolve, 1800));
-
-					progress.report({ message: "GetTableData, table->Parse, AddTable" });
-					await new Promise(resolve => setTimeout(resolve, 3000));
-
-					progress.report({ message: "arena.Allocate" });
-					await new Promise(resolve => setTimeout(resolve, 4000));
-				});
-
-				await vscode.window.withProgress({
-					location: vscode.ProgressLocation.Notification,
-					title: "Reducing dependencies",
-					cancellable: false
-				}, async (progress) => {
-					await new Promise(resolve => setTimeout(resolve, 100));
-				});
-
-				await vscode.window.withProgress({
-					location: vscode.ProgressLocation.Notification,
-					title: "Querying model",
-					cancellable: false
-				}, async (progress) => {
-					await new Promise(resolve => setTimeout(resolve, 6000));
-				});
-
-
-			}
-
-			// Gather implementations of functions called in the selected code
-			const implementationsPromises: Promise<string>[] = [];
-
-			// First get all document symbols
-			const symbols = await getDocumentSymbols(editor.document);
-
-			// Filter symbols that are within the selection range
-			const symbolsInSelection = symbols.filter(symbol =>
-				selection.contains(symbol.range) ||
-				symbol.range.contains(selection) ||
-				selection.intersection(symbol.range)
-			);
-
-			console.log(`Found ${symbolsInSelection.length} symbols in the selected code`);
-
-			// For each symbol, try to get implementations
-			for (const symbol of symbolsInSelection) {
-				// Use the symbol's selection range (usually the name of the symbol)
-				const position = symbol.selectionRange.start;
-
-				const implPromise = (vscode.commands.executeCommand<vscode.Location[]>(
-					'vscode.executeImplementationProvider',
-					editor.document.uri,
-					position
-				) as Promise<vscode.Location[]>).then(locations => {
-					if (locations && locations.length > 0) {
-						// Get the content of each implementation
-						return Promise.all(locations.map(async location => {
-							try {
-								const document = await vscode.workspace.openTextDocument(location.uri);
-								return document.getText(location.range);
-							} catch (error) {
-								console.error('Error getting implementation:', error);
-								return '';
-							}
-						})).then(implementations => implementations.join('\n\n'));
+					// Display dependencies
+					if (result.dependencies.length > 0) {
+						progress.report({ message: result.dependencies.join(", ") });
+					} else {
+						progress.report({ message: `Round ${round}: No dependencies found` });
 					}
-					return '';
-				}).catch(error => {
-					console.error('Error executing implementation provider:', error);
-					return '';
-				});
 
-				implementationsPromises.push(implPromise);
-			}
+					// Check if extraction is complete
+					isDone = result.done || false;
+					round++;
+				}
 
-			// Also check for function calls within the selection that might not be captured by symbols
-			// Get relevant positions for function calls (more targeted approach)
-			for (let line = selection.start.line; line <= selection.end.line; line++) {
-				const lineText = editor.document.lineAt(line).text;
+				if (round > MAX_ROUNDS && !isDone) {
+					progress.report({ message: "Reached maximum extraction rounds" });
+				}
+			});
 
-				// Use regex to find potential function calls in the line
-				const functionCallPattern = /\b\w+\s*\(/g;
-				let match;
+			await vscode.window.withProgress({
+				location: vscode.ProgressLocation.Notification,
+				title: "Reducing dependencies",
+				cancellable: false
+			}, async (progress) => {
+				await new Promise(resolve => setTimeout(resolve, 300));
+			});
 
-				while ((match = functionCallPattern.exec(lineText)) !== null) {
-					const callPosition = new vscode.Position(line, match.index);
+			await vscode.window.withProgress({
+				location: vscode.ProgressLocation.Notification,
+				title: "Querying model",
+				cancellable: false
+			}, async (progress) => {
 
-					// Check if this position is within our selection
-					if (selection.contains(callPosition)) {
-						const implPromise = vscode.commands.executeCommand<vscode.Location[]>(
-							'vscode.executeImplementationProvider',
-							editor.document.uri,
-							callPosition
-						).then(locations => {
-							if (locations && locations.length > 0) {
-								return Promise.all(locations.map(async location => {
-									try {
-										const document = await vscode.workspace.openTextDocument(location.uri);
-										return document.getText(location.range);
-									} catch (error) {
-										console.error('Error getting implementation:', error);
-										return '';
-									}
-								})).then(implementations => implementations.join('\n\n'));
-							}
-							return '';
-						}).catch(error => {
-							console.error('Error executing implementation provider:', error);
-							return '';
-						});
+				// Gather implementations of functions called in the selected code
+				const implementationsPromises: Promise<string>[] = [];
 
-						implementationsPromises.push(implPromise);
+				// First get all document symbols
+				const symbols = await getDocumentSymbols(editor.document);
+
+				// Filter symbols that are within the selection range
+				const symbolsInSelection = symbols.filter(symbol =>
+					selection.contains(symbol.range) ||
+					symbol.range.contains(selection) ||
+					selection.intersection(symbol.range)
+				);
+
+				console.log(`Found ${symbolsInSelection.length} symbols in the selected code`);
+
+				// For each symbol, try to get implementations
+				for (const symbol of symbolsInSelection) {
+					// Use the symbol's selection range (usually the name of the symbol)
+					const position = symbol.selectionRange.start;
+
+					const implPromise = (vscode.commands.executeCommand<vscode.Location[]>(
+						'vscode.executeImplementationProvider',
+						editor.document.uri,
+						position
+					) as Promise<vscode.Location[]>).then(locations => {
+						if (locations && locations.length > 0) {
+							// Get the content of each implementation
+							return Promise.all(locations.map(async location => {
+								try {
+									const document = await vscode.workspace.openTextDocument(location.uri);
+									return document.getText(location.range);
+								} catch (error) {
+									console.error('Error getting implementation:', error);
+									return '';
+								}
+							})).then(implementations => implementations.join('\n\n'));
+						}
+						return '';
+					}).catch(error => {
+						console.error('Error executing implementation provider:', error);
+						return '';
+					});
+
+					implementationsPromises.push(implPromise);
+				}
+
+				// Also check for function calls within the selection that might not be captured by symbols
+				// Get relevant positions for function calls (more targeted approach)
+				for (let line = selection.start.line; line <= selection.end.line; line++) {
+					const lineText = editor.document.lineAt(line).text;
+
+					// Use regex to find potential function calls in the line
+					const functionCallPattern = /\b\w+\s*\(/g;
+					let match;
+
+					while ((match = functionCallPattern.exec(lineText)) !== null) {
+						const callPosition = new vscode.Position(line, match.index);
+
+						// Check if this position is within our selection
+						if (selection.contains(callPosition)) {
+							const implPromise = Promise.resolve(vscode.commands.executeCommand<vscode.Location[]>(
+								'vscode.executeImplementationProvider',
+								editor.document.uri,
+								callPosition
+							)).then(locations => {
+								if (locations && locations.length > 0) {
+									return Promise.all(locations.map(async location => {
+										try {
+											const document = await vscode.workspace.openTextDocument(location.uri);
+											return document.getText(location.range);
+										} catch (error) {
+											console.error('Error getting implementation:', error);
+											return '';
+										}
+									})).then(implementations => implementations.join('\n\n'));
+								}
+								return '';
+							}).catch(error => {
+								console.error('Error executing implementation provider:', error);
+								return '';
+							});
+
+							implementationsPromises.push(implPromise);
+						}
 					}
 				}
-			}
 
-			// Wait for all implementation queries to complete
-			const implementations = await Promise.all(implementationsPromises);
-			const implementationsText = implementations.filter(impl => impl.length > 0).join('\n\n');
+				// Wait for all implementation queries to complete
+				const implementations = await Promise.all(implementationsPromises);
+				const implementationsText = implementations.filter(impl => impl.length > 0).join('\n\n');
 
-			// Combine selected code with implementations for analysis
-			const codeToAnalyze = `
+				// Combine selected code with implementations for analysis
+				const codeToAnalyze = `
 // Context
 ${implementationsText}
 // Original selected code
 ${selectedText}
 `;
 
-			console.log('Analyzing code with implementations included');
-			// const result = mockResult; // Use mock result
-			const result = await analyzeCodeForVulnerabilities(codeToAnalyze);
-			const pred = result.result;
-			lastAnalysisResult = pred; // Store for detailed explanation
-			const decorationType = getDecorationForResult(pred);
+				console.log('Analyzing code with implementations included');
+				// const result = mockResult; // Use mock result
+				const result = await analyzeCodeForVulnerabilities(codeToAnalyze);
+				const pred = result.result;
+				lastAnalysisResult = pred; // Store for detailed explanation
+				const decorationType = getDecorationForResult(pred);
 
-			editor.setDecorations(decorationType, [selection]);
+				editor.setDecorations(decorationType, [selection]);
 
-			// Display the result with a button for detailed explanation
-			if (pred.status === VulnerabilityStatus.Vulnerable) {
-				vscode.window.showErrorMessage(
-					`Vulnerability detected: ${pred.cweType}`,
-					{ modal: false },
-					'Show Details',
-					'Suggestions for Improvement'
-				).then(selection => {
-					if (selection === 'Show Details') {
-						showDetailedExplanation();
-					} else if (selection === 'Suggestions for Improvement') {
-						showImprovementSuggestions(pred);
-					}
-				});
-			} else {
-				vscode.window.showInformationMessage(
-					'Code appears to be benign',
-					{ modal: false },
-					'Show Details',
-					'Suggestions for Improvement'
-				).then(selection => {
-					if (selection === 'Show Details') {
-						showDetailedExplanation();
-					} else if (selection === 'Suggestions for Improvement') {
-						showImprovementSuggestions(pred);
-					}
-				});
-			}
+				// Display the result with a button for detailed explanation
+				if (pred.status === VulnerabilityStatus.Vulnerable) {
+					vscode.window.showErrorMessage(
+						`Vulnerability detected: ${pred.cweType}`,
+						{ modal: false },
+						'Show Details',
+						'Suggestions for Improvement'
+					).then(selection => {
+						if (selection === 'Show Details') {
+							showDetailedExplanation();
+						} else if (selection === 'Suggestions for Improvement') {
+							showImprovementSuggestions(pred);
+						}
+					});
+				} else {
+					vscode.window.showInformationMessage(
+						'Code appears to be benign',
+						{ modal: false },
+						'Show Details',
+					).then(selection => {
+						if (selection === 'Show Details') {
+							showDetailedExplanation();
+						} else if (selection === 'Suggestions for Improvement') {
+							showImprovementSuggestions(pred);
+						}
+					});
+				}
+			});
 		} catch (error) {
 			vscode.window.showErrorMessage(`Error analyzing code: ${error}`);
 		}
@@ -366,9 +356,8 @@ function clearAllDecorations() {
  * @returns Analysis result
  */
 async function analyzeCodeForVulnerabilities(code: string): Promise<AnalysisResult> {
-	// Get API endpoint from configuration or use default
-	const config = vscode.workspace.getConfiguration('vulscan');
-	const apiUrl = config.get('apiUrl') as string || "http://6479122b-01.cloud.together.ai:4401/analyze";
+	// Get the full API URL for analyze endpoint
+	const apiUrl = `${apiBaseUrl}/analyze`;
 
 	return new Promise((resolve, reject) => {
 		// Parse URL to determine if http or https should be used
@@ -514,9 +503,10 @@ function getWebviewContent(result: AnalysisResponse): string {
 	const statusStyle = result.status === VulnerabilityStatus.Vulnerable ? vulnerableStyle : benignStyle;
 	const statusEmoji = result.status === VulnerabilityStatus.Vulnerable ? '⚠️' : '✅';
 	const statusText = result.status === VulnerabilityStatus.Vulnerable ? 'Vulnerable' : 'Benign';
-
+	let functionReferences = '';
 	// Define file references with proper paths and lines
-	const functionReferences = `
+	if (result.cweType === 'CWE-416') {
+		functionReferences = `
         <h2>Function References</h2>
         <ul>
             <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/ots/src/ots.cc', 967); return false;"><strong>font->ParseTable</strong></a></li>
@@ -526,6 +516,26 @@ function getWebviewContent(result: AnalysisResponse): string {
             <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/ots/src/ots.cc', 1070); return false;"><strong>AddTable</strong></a></li>
         </ul>
     `;
+	}
+	else if (result.cweType === 'CWE-200'){
+		functionReferences = `
+        <h2>Function References</h2>
+        <ul>
+            <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/server/middlewares/static.ts', 264); return false;"><strong>ensureServingAccess</strong></a></li>
+            <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/utils.ts', 353); return false;"><strong>rawRE</strong></a></li>
+            <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/utils.ts', 352); return false;"><strong>urlRE</strong></a></li>
+            <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/server/middlewares/static.ts', 223); return false;"><strong>isFileServingAllowed</strong></a></li>
+            <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/utils.ts', 269); return false;"><strong>fsPathFromUrl</strong></a></li>
+			<li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/utils.ts', 262); return false;"><strong>fsPathFromId</strong></a></li>
+			<li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/shared/utils.ts', 31); return false;"><strong>cleanUrl</strong></a></li>
+			<li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/utils.ts', 256); return false;"><strong>VOLUME_RE</strong></a></li>			
+			<li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/shared/utils.ts', 30); return false;"><strong>postfixRE</strong></a></li>
+			<li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/utils.ts', 258); return false;"><strong>normalizePath</strong></a></li>			
+			<li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/server/middlewares/static.ts', 247); return false;"><strong>isFileLoadingAllowed</strong></a></li>
+        </ul>
+    `;
+	}
+
 
 	return `
         <!DOCTYPE html>
@@ -1071,4 +1081,95 @@ function escapeHtml(text: string): string {
 // This method is called when your extension is deactivated
 export function deactivate() {
 	clearAllDecorations();
+}
+
+/**
+ * Extract dependencies from code by making an API call
+ * @param code The code to analyze
+ * @param round The round number (starting from 1)
+ * @returns Object containing dependencies array and done flag
+ */
+async function extractDependencies(code: string, round: number): Promise<ExtractResponse> {
+	// Get the full API URL for extract endpoint
+	const apiUrl = `${apiBaseUrl}/extract`;
+
+	return new Promise((resolve, reject) => {
+		const http = require('http');
+		const urlObj = new URL(apiUrl);
+
+		const options = {
+			hostname: urlObj.hostname,
+			port: urlObj.port || 80,
+			path: urlObj.pathname,
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json'
+			}
+		};
+
+		const req = http.request(options, (res: any) => {
+			let data = '';
+
+			// Handle HTTP status errors
+			if (res.statusCode < 200 || res.statusCode >= 300) {
+				return reject(new Error(`API responded with status code ${res.statusCode}`));
+			}
+
+			res.on('data', (chunk: any) => {
+				data += chunk;
+			});
+
+			res.on('end', () => {
+				try {
+					const response: ExtractResult = JSON.parse(data);
+					const result = response.result;
+
+					if (response.status !== 'success') {
+						// Fallback to default dependencies if the API doesn't return the expected format
+						console.warn('API did not return expected format, using fallback dependencies');
+						result.dependencies = getFallbackDependencies(round);
+					}
+					resolve(result);
+				} catch (e) {
+					console.error(`Failed to parse API response: ${e}`);
+					reject(new Error(`Failed to parse API response: ${e}`));
+				}
+			});
+		});
+
+		req.on('error', (error: any) => {
+			console.error(`API request failed: ${error.message}`);
+			reject(new Error(`API request failed: ${error.message}`));
+		});
+
+		// Send the code and round information to the API
+		const requestBody = JSON.stringify({
+			code,
+			round
+		});
+		req.write(requestBody);
+		req.end();
+	});
+}
+
+/**
+ * Get fallback dependencies for a specific round if the API fails
+ * @param round The extraction round
+ * @returns Array of fallback dependencies
+ */
+function getFallbackDependencies(round: number): string[] {
+	switch (round) {
+		case 1:
+			return ["font->ParseTable", "font->GetTable"];
+		case 2:
+			return ["GetTableData", "table->Parse", "AddTable"];
+		case 3:
+			return ["arena.Allocate"];
+		case 4:
+			return ["ParseTableData", "ValidateTable"];
+		case 5:
+			return ["CleanupMemory"];
+		default:
+			return [`Round ${round}: Unknown dependencies`];
+	}
 }
