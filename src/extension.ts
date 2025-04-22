@@ -41,6 +41,7 @@ let apiBaseUrl: string = "http://6479122b-01.cloud.together.ai:4409";
 interface FunctionAnalysisResult {
     functionSymbol: vscode.DocumentSymbol;
     result: AnalysisResponse;
+    codeHash: string; // Add this field to track code changes
 }
 
 // Map to store analysis results by document URI
@@ -733,7 +734,7 @@ async function analyzeDocumentOnSave(document: vscode.TextDocument): Promise<voi
 		
 		console.log(`Found ${functionSymbols.length} functions/methods to analyze`);
 		
-			// Initialize the analysis results array for this document if it doesn't exist
+		// Initialize the analysis results array for this document if it doesn't exist
 		if (!documentAnalysisResults.has(document.uri.toString())) {
 			documentAnalysisResults.set(document.uri.toString(), []);
 		}
@@ -754,6 +755,8 @@ async function analyzeDocumentOnSave(document: vscode.TextDocument): Promise<voi
 				promise: Promise<AnalysisResult>; 
 				functionSymbol: vscode.DocumentSymbol;
 				code: string;
+				codeHash: string;
+				shouldAnalyze: boolean;
 			}[] = [];
 			
 			// Create all analysis promises
@@ -766,17 +769,52 @@ async function analyzeDocumentOnSave(document: vscode.TextDocument): Promise<voi
 				const functionRange = functionSymbol.range;
 				const functionCode = document.getText(functionRange);
 				
+				// Generate a hash of the function code to detect changes
+				const codeHash = generateCodeHash(functionCode);
+				
+				// Check if we already have a result for this function with the same hash
+				const existingResult = currentResults.find(r => 
+					r.functionSymbol.name === functionSymbol.name && 
+					r.codeHash === codeHash
+				);
+				
+				// Determine if we need to analyze this function
+				const shouldAnalyze = !existingResult;
+				
+				// If we already have a result for this function with the same code hash, reuse it
+				if (existingResult) {
+					console.log(`Reusing previous analysis for function: ${functionSymbol.name}`);
+					
+					// If the function is vulnerable, add its decoration
+					if (existingResult.result.status === VulnerabilityStatus.Vulnerable) {
+						vulnerableFunctionsCount++;
+						const decorationType = getDecorationForResult(existingResult.result);
+						editor.setDecorations(decorationType, [functionSymbol.range]);
+					}
+				}
+				
 				// Create the promise but don't await it yet
 				analysisPromises.push({
-					promise: analyzeCodeForVulnerabilities(functionCode),
+					// Only create a real promise if we need to analyze
+					promise: shouldAnalyze 
+						? analyzeCodeForVulnerabilities(functionCode)
+						: Promise.resolve({ 
+							result: existingResult?.result || { status: VulnerabilityStatus.Benign },
+							status: 'success' 
+						}),
 					functionSymbol,
-					code: functionCode
+					code: functionCode,
+					codeHash,
+					shouldAnalyze
 				});
 			}
 			
+			// Count how many functions actually need analysis
+			const functionsToAnalyze = analysisPromises.filter(item => item.shouldAnalyze).length;
+			
 			// Report initial progress
 			progress.report({ 
-				message: `Sending ${analysisPromises.length} analysis requests...`,
+				message: `Sending ${functionsToAnalyze} analysis requests (${analysisPromises.length - functionsToAnalyze} cached)...`,
 				increment: 5
 			});
 			
@@ -787,41 +825,46 @@ async function analyzeDocumentOnSave(document: vscode.TextDocument): Promise<voi
 			// Process each promise as it completes
 			await Promise.all(analysisPromises.map(async (item, index) => {
 				try {
+					// We already reported progress for cached functions, so only wait for ones we need to analyze
 					const result = await item.promise;
 					
-					// Create the analysis result object
-					const analysisResult = {
-						functionSymbol: item.functionSymbol,
-						result: result.result
-					};
-					
-					// Update the stored analysis results immediately
-					// Remove any existing result for this function
-					const existingIndex = currentResults.findIndex(r => 
-						r.functionSymbol.range.isEqual(item.functionSymbol.range)
-					);
-					
-					if (existingIndex >= 0) {
-						currentResults.splice(existingIndex, 1);
-					}
-					
-					// Add the new result
-					currentResults.push(analysisResult);
-					
-					// Update the map
-					documentAnalysisResults.set(document.uri.toString(), currentResults);
-					
-					// If vulnerable, add decoration
-					if (result.result.status === VulnerabilityStatus.Vulnerable) {
-						vulnerableFunctionsCount++;
-						const decorationType = getDecorationForResult(result.result);
-						editor.setDecorations(decorationType, [item.functionSymbol.range]);
+					// If we've analyzed this function, create a new result object
+					if (item.shouldAnalyze) {
+						// Create the analysis result object with code hash
+						const analysisResult = {
+							functionSymbol: item.functionSymbol,
+							result: result.result,
+							codeHash: item.codeHash
+						};
+						
+						// Update the stored analysis results immediately
+						// Remove any existing result for this function
+						const existingIndex = currentResults.findIndex(r => 
+							r.functionSymbol.name === item.functionSymbol.name
+						);
+						
+						if (existingIndex >= 0) {
+							currentResults.splice(existingIndex, 1);
+						}
+						
+						// Add the new result
+						currentResults.push(analysisResult);
+						
+						// Update the map
+						documentAnalysisResults.set(document.uri.toString(), currentResults);
+						
+						// If vulnerable, add decoration
+						if (result.result.status === VulnerabilityStatus.Vulnerable) {
+							vulnerableFunctionsCount++;
+							const decorationType = getDecorationForResult(result.result);
+							editor.setDecorations(decorationType, [item.functionSymbol.range]);
+						}
 					}
 					
 					// Update progress
 					completedCount++;
 					progress.report({ 
-						message: `Analyzed ${completedCount}/${analysisPromises.length} functions`,
+						message: `Analyzed ${completedCount}/${analysisPromises.length} functions (${analysisPromises.length - functionsToAnalyze} from cache)`,
 						increment: incrementPerFunction 
 					});
 					
@@ -850,6 +893,22 @@ async function analyzeDocumentOnSave(document: vscode.TextDocument): Promise<voi
 	} catch (error) {
 		console.error('Error analyzing file on save:', error);
 	}
+}
+
+/**
+ * Generates a simple hash of code content to detect changes
+ * @param code The code to hash
+ * @returns A string hash representation
+ */
+function generateCodeHash(code: string): string {
+    // Simple hash function based on code length and character sums
+    let hash = 0;
+    for (let i = 0; i < code.length; i++) {
+        const char = code.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash; // Convert to 32bit integer
+    }
+    return hash.toString(16);
 }
 
 /**
