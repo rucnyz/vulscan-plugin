@@ -35,14 +35,23 @@ let activeDecorations: vscode.TextEditorDecorationType[] = [];
 let lastAnalysisResult: AnalysisResponse | null = null;
 
 // Define a global API base URL
-let apiBaseUrl: string = "http://6479122b-01.cloud.together.ai:4401";
+let apiBaseUrl: string = "http://6479122b-01.cloud.together.ai:4409";
+
+// Store analysis results by function/method
+interface FunctionAnalysisResult {
+    functionSymbol: vscode.DocumentSymbol;
+    result: AnalysisResponse;
+}
+
+// Map to store analysis results by document URI
+const documentAnalysisResults = new Map<string, FunctionAnalysisResult[]>();
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
 	// Get API base URL from configuration
 	const config = vscode.workspace.getConfiguration('vulscan');
-	apiBaseUrl = config.get('apiBaseUrl') as string || "http://6479122b-01.cloud.together.ai:4401";
+	apiBaseUrl = config.get('apiBaseUrl') as string || apiBaseUrl;
 	console.log(`Using API base URL: ${apiBaseUrl}`);
 
 	// Use the console to output diagnostic information (console.log) and errors (console.error)
@@ -338,6 +347,27 @@ ${selectedText}
 			console.log('Auto-analyze feature activated with current editor');
 		}
 	}
+
+	// Register CodeLens provider
+	const codeLensProvider = new VulnerabilityScanCodeLensProvider();
+	const codeLensProviderDisposable = vscode.languages.registerCodeLensProvider(
+		{ scheme: 'file' },
+		codeLensProvider
+	);
+	
+	// Add CodeLens provider to subscriptions
+	context.subscriptions.push(codeLensProviderDisposable);
+
+	// Register command to show function details from CodeLens
+	const showFunctionDetailsCommand = vscode.commands.registerCommand(
+		'vulscan.showFunctionDetails', 
+		(documentUri: string, line: number, result: AnalysisResponse) => {
+			showFunctionDetails(documentUri, line, result);
+		}
+	);
+	
+	// Add command to subscriptions
+	context.subscriptions.push(showFunctionDetailsCommand);
 }
 
 /**
@@ -682,37 +712,140 @@ async function analyzeDocumentOnSave(document: vscode.TextDocument): Promise<voi
 	// Clear previous decorations first
 	clearAllDecorations();
 
-	// Get file content
-	const fileContent = document.getText();
-
 	try {
-		// Option 1: Analyze the entire file
-		const result = await analyzeCodeForVulnerabilities(fileContent);
-		const pred = result.result;
-		lastAnalysisResult = pred; // Store for detailed explanation
-
-		if (pred.status === VulnerabilityStatus.Vulnerable) {
-			// Create a decoration for the entire document
-			const fullDocumentRange = new vscode.Range(
-				document.positionAt(0),
-				document.positionAt(fileContent.length)
-			);
-
-			const decorationType = getDecorationForResult(pred);
-			editor.setDecorations(decorationType, [fullDocumentRange]);
-
-			vscode.window.showWarningMessage(
-				`Auto-scan found vulnerability: ${pred.cweType}`,
-				{ modal: false },
-				'Show Details'
-			).then(selection => {
-				if (selection === 'Show Details') {
-					showDetailedExplanation();
+		// Get document symbols to find functions/methods
+		const symbols = await getDocumentSymbols(document);
+		
+		// Filter to only include function and method symbols
+		// filter declarations
+		const functionSymbols = symbols.filter(symbol => 
+			(symbol.kind === vscode.SymbolKind.Function || 
+			symbol.kind === vscode.SymbolKind.Method ||
+			symbol.kind === vscode.SymbolKind.Constructor ) 
+			&& !symbol.detail.includes("declaration")
+			&& !symbol.name.startsWith("~")
+		);
+		
+		if (functionSymbols.length === 0) {
+			console.log('No functions or methods found in the document');
+			return;
+		}
+		
+		console.log(`Found ${functionSymbols.length} functions/methods to analyze`);
+		
+			// Initialize the analysis results array for this document if it doesn't exist
+		if (!documentAnalysisResults.has(document.uri.toString())) {
+			documentAnalysisResults.set(document.uri.toString(), []);
+		}
+		
+		// Get the current results array
+		const currentResults = documentAnalysisResults.get(document.uri.toString()) || [];
+		
+		// Track vulnerable functions count
+		let vulnerableFunctionsCount = 0;
+		
+		await vscode.window.withProgress({
+			location: vscode.ProgressLocation.Notification,
+			title: "Analyzing functions",
+			cancellable: true
+		}, async (progress, token) => {
+			// Create an array to store all analysis promises and their associated function symbols
+			const analysisPromises: { 
+				promise: Promise<AnalysisResult>; 
+				functionSymbol: vscode.DocumentSymbol;
+				code: string;
+			}[] = [];
+			
+			// Create all analysis promises
+			for (const functionSymbol of functionSymbols) {
+				if (token.isCancellationRequested) {
+					break;
 				}
+				
+				// Extract the function's code
+				const functionRange = functionSymbol.range;
+				const functionCode = document.getText(functionRange);
+				
+				// Create the promise but don't await it yet
+				analysisPromises.push({
+					promise: analyzeCodeForVulnerabilities(functionCode),
+					functionSymbol,
+					code: functionCode
+				});
+			}
+			
+			// Report initial progress
+			progress.report({ 
+				message: `Sending ${analysisPromises.length} analysis requests...`,
+				increment: 5
 			});
+			
+			// Process results as they complete
+			let completedCount = 0;
+			const incrementPerFunction = 95 / analysisPromises.length;
+			
+			// Process each promise as it completes
+			await Promise.all(analysisPromises.map(async (item, index) => {
+				try {
+					const result = await item.promise;
+					
+					// Create the analysis result object
+					const analysisResult = {
+						functionSymbol: item.functionSymbol,
+						result: result.result
+					};
+					
+					// Update the stored analysis results immediately
+					// Remove any existing result for this function
+					const existingIndex = currentResults.findIndex(r => 
+						r.functionSymbol.range.isEqual(item.functionSymbol.range)
+					);
+					
+					if (existingIndex >= 0) {
+						currentResults.splice(existingIndex, 1);
+					}
+					
+					// Add the new result
+					currentResults.push(analysisResult);
+					
+					// Update the map
+					documentAnalysisResults.set(document.uri.toString(), currentResults);
+					
+					// If vulnerable, add decoration
+					if (result.result.status === VulnerabilityStatus.Vulnerable) {
+						vulnerableFunctionsCount++;
+						const decorationType = getDecorationForResult(result.result);
+						editor.setDecorations(decorationType, [item.functionSymbol.range]);
+					}
+					
+					// Update progress
+					completedCount++;
+					progress.report({ 
+						message: `Analyzed ${completedCount}/${analysisPromises.length} functions`,
+						increment: incrementPerFunction 
+					});
+					
+				} catch (error) {
+					console.error(`Error analyzing function ${item.functionSymbol.name}:`, error);
+					completedCount++;
+					progress.report({ 
+						message: `Error analyzing ${item.functionSymbol.name}`,
+						increment: incrementPerFunction
+					});
+				}
+			}));
+		});
+		
+		// Show final notification about analysis results
+		if (vulnerableFunctionsCount > 0) {
+			// Show notification with count of vulnerable functions
+			vscode.window.showWarningMessage(
+				`Found ${vulnerableFunctionsCount} vulnerable functions. Check the CodeLens indicators for details.`
+			);
 		} else {
-			// Add feedback for benign files too
-			console.log('File analyzed and appears to be benign');
+			vscode.window.showInformationMessage(
+				'No vulnerabilities found in functions.'
+			);
 		}
 	} catch (error) {
 		console.error('Error analyzing file on save:', error);
@@ -1172,4 +1305,79 @@ function getFallbackDependencies(round: number): string[] {
 		default:
 			return [`Round ${round}: Unknown dependencies`];
 	}
+}
+
+/**
+ * CodeLens provider for showing vulnerability scan results
+ */
+class VulnerabilityScanCodeLensProvider implements vscode.CodeLensProvider {
+    private _onDidChangeCodeLenses: vscode.EventEmitter<void> = new vscode.EventEmitter<void>();
+    public readonly onDidChangeCodeLenses: vscode.Event<void> = this._onDidChangeCodeLenses.event;
+
+    constructor() {
+        // Refresh CodeLenses when analysis results change
+        const refreshCodeLenses = () => {
+            this._onDidChangeCodeLenses.fire();
+        };
+        
+        // Trigger refresh when configuration changes
+        vscode.workspace.onDidChangeConfiguration(e => {
+            if (e.affectsConfiguration('vulscan')) {
+                refreshCodeLenses();
+            }
+        });
+    }
+
+    public provideCodeLenses(document: vscode.TextDocument): vscode.ProviderResult<vscode.CodeLens[]> {
+        // Get analysis results for this document
+        const documentUri = document.uri.toString();
+        const analysisResults = documentAnalysisResults.get(documentUri) || [];
+        
+        if (analysisResults.length === 0) {
+            return [];
+        }
+        
+        const codeLenses: vscode.CodeLens[] = [];
+        
+        // Create a CodeLens for each analyzed function
+        for (const analysisResult of analysisResults) {
+            const { functionSymbol, result } = analysisResult;
+            
+            // Create a range for the first line of the function
+            const range = new vscode.Range(
+                functionSymbol.range.start,
+                functionSymbol.range.start.translate(0, functionSymbol.name.length + 2)
+            );
+            
+            // Create CodeLens with appropriate title based on vulnerability status
+            const title = result.status === VulnerabilityStatus.Vulnerable 
+                ? `⚠️ Vulnerable: ${result.cweType || 'Unknown vulnerability'}`
+                : '✅ Benign';
+            
+            // Command to show detailed explanation when clicked
+            const command: vscode.Command = {
+                title,
+                command: 'vulscan.showFunctionDetails',
+                arguments: [document.uri.toString(), functionSymbol.range.start.line, result]
+            };
+            
+            codeLenses.push(new vscode.CodeLens(range, command));
+        }
+        
+        return codeLenses;
+    }
+}
+
+/**
+ * Shows detailed explanation for a specific function
+ * @param documentUri The URI of the document
+ * @param line The line number of the function
+ * @param result The analysis result
+ */
+async function showFunctionDetails(documentUri: string, line: number, result: AnalysisResponse): Promise<void> {
+    // Set the last analysis result for the detailed explanation
+    lastAnalysisResult = result;
+    
+    // Show the detailed explanation
+    showDetailedExplanation();
 }

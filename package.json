@@ -53,7 +53,7 @@
       "properties": {
         "vulscan.apiBaseUrl": {
           "type": "string",
-          "default": "http://6479122b-01.cloud.together.ai:4401",
+          "default": "http://6479122b-01.cloud.together.ai:4409",
           "description": "Base URL for the vulnerability analysis API endpoints."
         },
         "vulscan.autoAnalyzeOnSave": {
