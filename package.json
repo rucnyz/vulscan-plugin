@@ -3,6 +3,11 @@
   "displayName": "VulScan",
   "description": "A VSCode extension that scans selected code for vulnerabilities",
   "version": "0.0.1",
+  "publisher": "YuzhouNie",
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
   "engines": {
     "vscode": "^1.98.0"
   },
