@@ -1,15 +1,15 @@
 {
-  "name": "vulscan",
-  "displayName": "VulScan",
-  "description": "A VSCode extension that scans selected code for vulnerabilities",
+  "name": "VirtueGuard-Code",
+  "displayName": "VirtueGuard-Code",
+  "description": "A VSCode extension that scans code for vulnerabilities",
   "version": "0.0.1",
   "publisher": "YuzhouNie",
   "repository": {
     "type": "git",
-    "url": ""
+    "url": "https://github.com/rucnyz/vulscan-plugin"
   },
   "engines": {
-    "vscode": "^1.98.0"
+    "vscode": "^1.96.0"
   },
   "categories": [
     "Other"
