@@ -2,7 +2,7 @@
   "name": "VirtueGuard-Code",
   "displayName": "VirtueGuard-Code",
   "description": "A VSCode extension that scans code for vulnerabilities",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "YuzhouNie",
   "repository": {
     "type": "git",
