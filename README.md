@@ -6,7 +6,7 @@ This is the README for our extension "VirtueGuard-Code", a powerful vulnerabilit
 
 ### 1.1 API Base URL
 
-You can set the API base URL by setting the `vulscan.apiBaseUrl` in the `settings.json` file. The default URL is "http://6479122b-01.cloud.together.ai:4409".
+You can set the API base URL by setting the `vulscan.apiBaseUrl` in the `settings.json` file. The default URL is "http://api.virtueai.io/api/vulscan".
 
 ### 1.2 Auto-Analysis Settings
 

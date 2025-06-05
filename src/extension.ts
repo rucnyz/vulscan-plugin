@@ -35,7 +35,7 @@ let activeDecorations: vscode.TextEditorDecorationType[] = [];
 let lastAnalysisResult: AnalysisResponse | null = null;
 
 // Define a global API base URL
-let apiBaseUrl: string = "http://6479122b-01.cloud.together.ai:4409";
+let apiBaseUrl: string = "http://api.virtueai.io/api/vulscan";
 
 // Store analysis results by function/method
 interface FunctionAnalysisResult {

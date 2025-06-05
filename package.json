@@ -2,14 +2,14 @@
   "name": "VirtueGuard-Code",
   "displayName": "VirtueGuard-Code",
   "description": "A VSCode extension that scans code for vulnerabilities",
-  "version": "0.2.0",
+  "version": "0.0.1",
   "publisher": "YuzhouNie",
   "repository": {
     "type": "git",
     "url": "https://github.com/rucnyz/vulscan-plugin"
   },
   "engines": {
-    "vscode": "^1.96.0"
+    "vscode": "^1.90.0"
   },
   "categories": [
     "Other"
@@ -58,7 +58,7 @@
       "properties": {
         "vulscan.apiBaseUrl": {
           "type": "string",
-          "default": "http://6479122b-01.cloud.together.ai:4409",
+          "default": "http://api.virtueai.io/api/vulscan",
           "description": "Base URL for the vulnerability analysis API endpoints."
         },
         "vulscan.autoAnalyzeOnSave": {
