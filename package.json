@@ -1,5 +1,5 @@
 {
-  "icon": "assets/icon.png",
+  "icon": "assets/icon.jpg",
   "name": "virtueguard-code",
   "displayName": "VirtueGuard-Code",
   "description": "A VSCode extension that scans code for vulnerabilities",
