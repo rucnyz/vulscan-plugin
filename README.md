@@ -32,7 +32,7 @@ To enable this mode:
 2. Search for "vulscan.autoAnalyzeOnSave"
 3. Set it to `true`
 
-![autoscan](./assets/automode.png)
+![automode](https://github.com/user-attachments/assets/a19afe73-0abf-407c-8173-c2192c8cafbe)
 
 ### 2.2 Manual Scan Mode
 
@@ -49,7 +49,7 @@ To use this mode:
 2. Right-click and choose "VulScan: Analyze Selected Code" or use the command palette
 3. View the analysis results and improvement suggestions
 
-![manualscan](./assets/manual.png)
+![manual](https://github.com/user-attachments/assets/bd089934-9f55-47b4-b3a8-7754dd009071)
 
 
 
