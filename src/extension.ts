@@ -7,6 +7,12 @@ enum VulnerabilityStatus {
 	Vulnerable = 'yes'
 }
 
+// Define enum for EU AI Act violation status
+enum EUAIActViolationStatus {
+	NoViolation = 'no',
+	Violation = 'yes'
+}
+
 // Define interfaces for the analysis result
 interface AnalysisResponse {
 	status: VulnerabilityStatus;
@@ -15,12 +21,29 @@ interface AnalysisResponse {
 	response?: string;
 	usage?: any;
 }
+
+// Define interfaces for EU AI Act analysis
+interface EUAIActAnalysisResponse {
+	status: EUAIActViolationStatus;
+	violationType?: string;
+	article?: string;
+	model?: string;
+	response?: string;
+	usage?: any;
+}
+
 interface ExtractResponse {
 	dependencies: string[];
 	done?: boolean;
 }
+
 interface AnalysisResult {
 	result: AnalysisResponse;
+	status: 'success' | 'error';
+}
+
+interface EUAIActAnalysisResult {
+	result: EUAIActAnalysisResponse;
 	status: 'success' | 'error';
 }
 
@@ -28,14 +51,16 @@ interface ExtractResult {
 	result: ExtractResponse;
 	status: 'success' | 'error';
 }
+
 // Track active decorations
 let activeDecorations: vscode.TextEditorDecorationType[] = [];
 
 // Store the latest analysis result for showing detailed explanation
 let lastAnalysisResult: AnalysisResponse | null = null;
+let lastEUAIActResult: EUAIActAnalysisResponse | null = null;
 
 // Define a global API base URL
-let apiBaseUrl: string = "http://api.virtueai.io/api/vulscan";
+let apiBaseUrl: string = "https://api.virtueai.io/api/vulscan";
 
 // Store analysis results by function/method
 interface FunctionAnalysisResult {
@@ -44,8 +69,15 @@ interface FunctionAnalysisResult {
     codeHash: string; // Add this field to track code changes
 }
 
+interface FunctionEUAIActResult {
+    functionSymbol: vscode.DocumentSymbol;
+    result: EUAIActAnalysisResponse;
+    codeHash: string;
+}
+
 // Map to store analysis results by document URI
 const documentAnalysisResults = new Map<string, FunctionAnalysisResult[]>();
+const documentEUAIActResults = new Map<string, FunctionEUAIActResult[]>();
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
@@ -276,6 +308,115 @@ ${selectedText}
 		}
 	});
 
+	// Register a command to analyze selected code for EU AI Act compliance
+	const analyzeEUAIActCommand = vscode.commands.registerCommand('vulscan.analyzeEUAIAct', async () => {
+		const editor = vscode.window.activeTextEditor;
+		if (!editor) {
+			vscode.window.showInformationMessage('No editor is active');
+			return;
+		}
+
+		const selection = editor.selection;
+		if (selection.isEmpty) {
+			vscode.window.showInformationMessage('Please select some code to analyze');
+			return;
+		}
+
+		const selectedText = editor.document.getText(selection);
+		vscode.window.showInformationMessage('Analyzing code for EU AI Act compliance...');
+		
+		try {
+			await vscode.window.withProgress({
+				location: vscode.ProgressLocation.Notification,
+				title: "Analyzing EU AI Act compliance",
+				cancellable: false
+			}, async (progress) => {
+				// Gather implementations similar to vulnerability analysis
+				const implementationsPromises: Promise<string>[] = [];
+				const symbols = await getDocumentSymbols(editor.document);
+				
+				const symbolsInSelection = symbols.filter(symbol =>
+					selection.contains(symbol.range) ||
+					symbol.range.contains(selection) ||
+					selection.intersection(symbol.range)
+				);
+
+				// Get implementations
+				for (const symbol of symbolsInSelection) {
+					const position = symbol.selectionRange.start;
+					const implPromise = (vscode.commands.executeCommand<vscode.Location[]>(
+						'vscode.executeImplementationProvider',
+						editor.document.uri,
+						position
+					) as Promise<vscode.Location[]>).then(locations => {
+						if (locations && locations.length > 0) {
+							return Promise.all(locations.map(async location => {
+								try {
+									const document = await vscode.workspace.openTextDocument(location.uri);
+									return document.getText(location.range);
+								} catch (error) {
+									console.error('Error getting implementation:', error);
+									return '';
+								}
+							})).then(implementations => implementations.join('\n\n'));
+						}
+						return '';
+					}).catch(error => {
+						console.error('Error executing implementation provider:', error);
+						return '';
+					});
+
+					implementationsPromises.push(implPromise);
+				}
+
+				const implementations = await Promise.all(implementationsPromises);
+				const implementationsText = implementations.filter(impl => impl.length > 0).join('\n\n');
+
+				const codeToAnalyze = `
+// Context
+${implementationsText}
+// Original selected code
+${selectedText}
+`;
+
+				const result = await analyzeCodeForEUAIAct(codeToAnalyze);
+				const pred = result.result;
+				lastEUAIActResult = pred;
+				
+				const decorationType = getEUAIActDecorationForResult(pred);
+				editor.setDecorations(decorationType, [selection]);
+
+				// Display the result
+				if (pred.status === EUAIActViolationStatus.Violation) {
+					vscode.window.showErrorMessage(
+						`EU AI Act Violation: ${pred.article}`,
+						{ modal: false },
+						'Show Details',
+						'Compliance Suggestions'
+					).then(selection => {
+						if (selection === 'Show Details') {
+							showEUAIActDetailedExplanation();
+						} else if (selection === 'Compliance Suggestions') {
+							showEUAIActComplianceSuggestions(pred);
+						}
+					});
+				} else {
+					vscode.window.showInformationMessage(
+						'No EU AI Act violations detected',
+						{ modal: false },
+						'Show Details'
+					).then(selection => {
+						if (selection === 'Show Details') {
+							showEUAIActDetailedExplanation();
+						}
+					});
+				}
+			});
+		} catch (error) {
+			vscode.window.showErrorMessage(`Error analyzing code for EU AI Act: ${error}`);
+		}
+	});
+
 	// Register a command to clear all decorations
 	const clearDecorations = vscode.commands.registerCommand('vulscan.clearDecorations', () => {
 		clearAllDecorations();
@@ -285,6 +426,11 @@ ${selectedText}
 	// Register a command to show detailed explanation
 	const showDetailsCommand = vscode.commands.registerCommand('vulscan.showDetails', () => {
 		showDetailedExplanation();
+	});
+
+	// Register a command to show EU AI Act details
+	const showEUAIActDetailsCommand = vscode.commands.registerCommand('vulscan.showEUAIActDetails', () => {
+		showEUAIActDetailedExplanation();
 	});
 
 	// Explicitly register a command to toggle auto-analyze on save
@@ -306,14 +452,27 @@ ${selectedText}
 			const autoAnalyzeOnSave = config.get('autoAnalyzeOnSave') as boolean || false;
 			console.log(`Configuration changed: Auto-analyze on save: ${autoAnalyzeOnSave}`);
 		}
+		
+		// Update API base URL when configuration changes
+		if (e.affectsConfiguration('vulscan.apiBaseUrl')) {
+			const config = vscode.workspace.getConfiguration('vulscan');
+			const newApiUrl = config.get('apiBaseUrl') as string;
+			if (newApiUrl && newApiUrl !== apiBaseUrl) {
+				apiBaseUrl = newApiUrl;
+				console.log(`Configuration changed: API base URL updated to: ${apiBaseUrl}`);
+				vscode.window.showInformationMessage(`API base URL updated to: ${apiBaseUrl}`);
+			}
+		}
 	});
 
 	// Add all subscriptions
 	context.subscriptions.push(
 		analyzeCodeCommand,
+		analyzeEUAIActCommand,
 		clearDecorations,
 		onSaveListener,
 		showDetailsCommand,
+		showEUAIActDetailsCommand,
 		toggleAutoAnalyzeCommand,
 		configListener
 	);
@@ -366,9 +525,18 @@ ${selectedText}
 			showFunctionDetails(documentUri, line, result);
 		}
 	);
+
+	// Register command to show EU AI Act function details from CodeLens
+	const showEUAIActFunctionDetailsCommand = vscode.commands.registerCommand(
+		'vulscan.showEUAIActFunctionDetails', 
+		(documentUri: string, line: number, result: EUAIActAnalysisResponse) => {
+			showEUAIActFunctionDetails(documentUri, line, result);
+		}
+	);
 	
-	// Add command to subscriptions
+	// Add commands to subscriptions
 	context.subscriptions.push(showFunctionDetailsCommand);
+	context.subscriptions.push(showEUAIActFunctionDetailsCommand);
 }
 
 /**
@@ -389,6 +557,65 @@ function clearAllDecorations() {
 async function analyzeCodeForVulnerabilities(code: string): Promise<AnalysisResult> {
 	// Get the full API URL for analyze endpoint
 	const apiUrl = `${apiBaseUrl}/analyze`;
+
+	return new Promise((resolve, reject) => {
+		// Parse URL to determine if http or https should be used
+		const isHttps = apiUrl.startsWith('https');
+		const http = isHttps ? require('https') : require('http');
+
+		const urlObj = new URL(apiUrl);
+
+		const options = {
+			hostname: urlObj.hostname,
+			port: urlObj.port || (isHttps ? 443 : 80),
+			path: urlObj.pathname,
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json'
+			}
+		};
+
+		const req = http.request(options, (res: any) => {
+			let data = '';
+
+			// Handle HTTP status errors
+			if (res.statusCode < 200 || res.statusCode >= 300) {
+				return reject(new Error(`API responded with status code ${res.statusCode}`));
+			}
+
+			res.on('data', (chunk: any) => {
+				data += chunk;
+			});
+
+			res.on('end', () => {
+				try {
+					const response = JSON.parse(data);
+					resolve(response);
+				} catch (e) {
+					reject(new Error(`Failed to parse API response: ${e}`));
+				}
+			});
+		});
+
+		req.on('error', (error: any) => {
+			reject(new Error(`API request failed: ${error.message}`));
+		});
+
+		// Send the code to analyze
+		const requestBody = JSON.stringify({ code });
+		req.write(requestBody);
+		req.end();
+	});
+}
+
+/**
+ * Send the code to an API for EU AI Act analysis
+ * @param code The code to analyze
+ * @returns EU AI Act analysis result
+ */
+async function analyzeCodeForEUAIAct(code: string): Promise<EUAIActAnalysisResult> {
+	// Get the full API URL for EU AI Act analyze endpoint
+	const apiUrl = `${apiBaseUrl}/analyze-eu-ai-act`;
 
 	return new Promise((resolve, reject) => {
 		// Parse URL to determine if http or https should be used
@@ -470,6 +697,35 @@ function getDecorationForResult(result: AnalysisResponse): vscode.TextEditorDeco
 }
 
 /**
+ * Get the appropriate decoration type based on EU AI Act analysis result
+ */
+function getEUAIActDecorationForResult(result: EUAIActAnalysisResponse): vscode.TextEditorDecorationType {
+	let decorationType;
+	if (result.status === EUAIActViolationStatus.Violation) {
+		// Create a custom decoration for this specific EU AI Act violation
+		decorationType = vscode.window.createTextEditorDecorationType({
+			backgroundColor: 'rgba(255, 165, 0, 0.2)', // Orange for EU AI Act violations
+			after: {
+				contentText: ` 🇪🇺 ${result.article || 'EU AI Act Violation'}`,
+				color: 'orange'
+			}
+		});
+	} else {
+		decorationType = vscode.window.createTextEditorDecorationType({
+			backgroundColor: 'rgba(0, 100, 255, 0.2)', // Blue for compliance
+			after: {
+				contentText: ' 🇪🇺 Compliant',
+				color: 'blue'
+			}
+		});
+	}
+
+	// Add to active decorations for tracking
+	activeDecorations.push(decorationType);
+	return decorationType;
+}
+
+/**
  * Shows detailed explanation of the last analysis result in a read-only editor
  */
 function showDetailedExplanation() {
@@ -523,6 +779,131 @@ function showDetailedExplanation() {
 
 	// Set HTML content with the formatted explanation
 	panel.webview.html = getWebviewContent(lastAnalysisResult);
+}
+
+/**
+ * Shows detailed explanation of the last EU AI Act analysis result
+ */
+function showEUAIActDetailedExplanation() {
+	if (!lastEUAIActResult || !lastEUAIActResult.response) {
+		vscode.window.showInformationMessage('No EU AI Act analysis details available.');
+		return;
+	}
+
+	// Create a read-only webview panel to display the explanation
+	const panel = vscode.window.createWebviewPanel(
+		'euAIActDetails',
+		'EU AI Act Compliance Analysis',
+		vscode.ViewColumn.Beside,
+		{
+			enableScripts: true,
+			localResourceRoots: [],
+			retainContextWhenHidden: true
+		}
+	);
+
+	// Set HTML content with the formatted explanation
+	panel.webview.html = getEUAIActWebviewContent(lastEUAIActResult);
+}
+
+/**
+ * Format the HTML content for the EU AI Act webview panel
+ */
+function getEUAIActWebviewContent(result: EUAIActAnalysisResponse): string {
+	const violationStyle = 'color: #ff6600; background-color: rgba(255, 165, 0, 0.1); padding: 5px;';
+	const compliantStyle = 'color: #0066ff; background-color: rgba(0, 100, 255, 0.1); padding: 5px;';
+	const statusStyle = result.status === EUAIActViolationStatus.Violation ? violationStyle : compliantStyle;
+	const statusEmoji = result.status === EUAIActViolationStatus.Violation ? '⚠️' : '✅';
+	const statusText = result.status === EUAIActViolationStatus.Violation ? 'Violation Detected' : 'Compliant';
+
+	return `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>EU AI Act Compliance Analysis</title>
+            <style>
+                body {
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+                    padding: 20px;
+                    line-height: 1.6;
+                }
+                h1 {
+                    border-bottom: 1px solid #eaecef;
+                    padding-bottom: 10px;
+                    margin-bottom: 20px;
+                }
+                h2 {
+                    margin-top: 24px;
+                    margin-bottom: 16px;
+                    font-weight: 600;
+                }
+                .status {
+                    font-weight: bold;
+                    display: inline-block;
+                    border-radius: 3px;
+                    ${statusStyle}
+                }
+                .explanation {
+                    background-color: #f6f8fa;
+                    border-radius: 3px;
+                    padding: 16px;
+                }
+                pre {
+                    background-color: #f3f3f3;
+                    padding: 10px;
+                    border-radius: 3px;
+                    overflow-x: auto;
+                }
+                code {
+                    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+                    font-size: 0.9em;
+                }
+                .eu-flag {
+                    font-size: 1.2em;
+                    margin-right: 5px;
+                }
+                blockquote {
+                    border-left: 4px solid #0066ff;
+                    padding-left: 16px;
+                    margin-left: 0;
+                    color: #555;
+                }
+            </style>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/markdown-it/12.3.2/markdown-it.min.js"></script>
+            <script>
+                const vscode = acquireVsCodeApi();
+                
+                document.addEventListener('DOMContentLoaded', () => {
+                    const md = window.markdownit({
+                        html: false,
+                        linkify: true,
+                        typographer: true
+                    });
+                    
+                    const content = ${JSON.stringify(result.response || '')};
+                    const markdownElement = document.getElementById('markdown-content');
+                    if (markdownElement) {
+                        markdownElement.innerHTML = md.render(content);
+                    }
+                });
+            </script>
+        </head>
+        <body>
+            <h1><span class="eu-flag">🇪🇺</span>EU AI Act Compliance Analysis</h1>
+            
+            <h2>Compliance Status</h2>
+            <div class="status">${statusEmoji} ${statusText}</div>
+            
+            ${result.article ? `<h2>Article Reference</h2><div>${result.article}</div>` : ''}
+            ${result.violationType ? `<h2>Violation Type</h2><div>${result.violationType}</div>` : ''}
+            
+            <h2>Detailed Analysis</h2>
+            <div class="explanation" id="markdown-content"></div>
+        </body>
+        </html>
+    `;
 }
 
 /**
@@ -694,6 +1075,279 @@ function getWebviewContent(result: AnalysisResponse): string {
         </body>
         </html>
     `;
+}
+
+/**
+ * Shows EU AI Act compliance suggestions
+ */
+function showEUAIActComplianceSuggestions(result: EUAIActAnalysisResponse) {
+	if (!result) {
+		vscode.window.showInformationMessage('No EU AI Act analysis result available.');
+		return;
+	}
+
+	const panel = vscode.window.createWebviewPanel(
+		'euAIActCompliance',
+		'EU AI Act Compliance Suggestions',
+		vscode.ViewColumn.Beside,
+		{
+			enableScripts: true,
+			retainContextWhenHidden: true
+		}
+	);
+
+	const suggestions = generateEUAIActComplianceSuggestions(result);
+	panel.webview.html = getEUAIActComplianceSuggestionsContent(suggestions, result);
+}
+
+/**
+ * Generates EU AI Act compliance suggestions
+ */
+function generateEUAIActComplianceSuggestions(result: EUAIActAnalysisResponse): {
+	title: string;
+	description: string;
+	suggestions: { title: string; description: string; actions?: string[] }[];
+	hasViolation: boolean;
+} {
+	const hasViolation = result.status === EUAIActViolationStatus.Violation;
+
+	if (hasViolation) {
+		// Specific suggestions based on the article violated
+		if (result.article?.includes('Article 15.4')) {
+			return {
+				title: "Addressing Article 15.4 Violations - Cybersecurity Requirements",
+				description: "Your AI system needs to meet the accuracy, robustness and cybersecurity requirements:",
+				suggestions: [
+					{
+						title: "1. Implement Security Measures",
+						description: "Add appropriate security controls to protect against the identified threats",
+						actions: [
+							"Implement input validation and sanitization",
+							"Add authentication and authorization mechanisms",
+							"Use encryption for sensitive data",
+							"Implement rate limiting and access controls"
+						]
+					},
+					{
+						title: "2. Conduct Security Testing",
+						description: "Perform comprehensive security assessments",
+						actions: [
+							"Run penetration testing",
+							"Perform vulnerability scanning",
+							"Conduct code security reviews",
+							"Test against common attack vectors"
+						]
+					},
+					{
+						title: "3. Document Security Measures",
+						description: "Maintain documentation of security implementations",
+						actions: [
+							"Document all security controls",
+							"Create incident response procedures",
+							"Maintain security update logs",
+							"Document risk assessments"
+						]
+					}
+				],
+				hasViolation: true
+			};
+		} else if (result.article?.includes('Article 10')) {
+			return {
+				title: "Addressing Article 10 Violations - Data Governance",
+				description: "Your AI system must comply with data and data governance requirements:",
+				suggestions: [
+					{
+						title: "1. Implement Privacy Controls",
+						description: "Ensure proper handling of personal data",
+						actions: [
+							"Implement data minimization principles",
+							"Add consent management mechanisms",
+							"Ensure data anonymization where needed",
+							"Implement right to erasure procedures"
+						]
+					},
+					{
+						title: "2. Data Quality Management",
+						description: "Ensure high quality and appropriate data sets",
+						actions: [
+							"Implement data validation procedures",
+							"Document data sources and processing",
+							"Ensure data relevance and representation",
+							"Monitor for bias in data sets"
+						]
+					}
+				],
+				hasViolation: true
+			};
+		}
+
+		// Generic suggestions for violations
+		return {
+			title: "EU AI Act Compliance Requirements",
+			description: "Your AI system needs to address the identified compliance issues:",
+			suggestions: [
+				{
+					title: "1. Review EU AI Act Requirements",
+					description: "Thoroughly understand the specific requirements for your AI system category"
+				},
+				{
+					title: "2. Implement Technical Measures",
+					description: "Add necessary technical controls to ensure compliance"
+				},
+				{
+					title: "3. Create Documentation",
+					description: "Maintain comprehensive documentation of your AI system"
+				},
+				{
+					title: "4. Conduct Compliance Assessment",
+					description: "Perform regular assessments to ensure ongoing compliance"
+				}
+			],
+			hasViolation: true
+		};
+	} else {
+		// Suggestions for compliant systems
+		return {
+			title: "Maintaining EU AI Act Compliance",
+			description: "Your code appears compliant, but consider these best practices:",
+			suggestions: [
+				{
+					title: "1. Regular Compliance Reviews",
+					description: "Schedule periodic reviews to ensure continued compliance as regulations evolve"
+				},
+				{
+					title: "2. Documentation",
+					description: "Maintain clear documentation of AI system design and decision-making processes"
+				},
+				{
+					title: "3. Transparency Measures",
+					description: "Implement transparency features to explain AI decisions when applicable"
+				},
+				{
+					title: "4. Risk Management",
+					description: "Continuously assess and mitigate potential risks in your AI system"
+				}
+			],
+			hasViolation: false
+		};
+	}
+}
+
+/**
+ * Format HTML content for EU AI Act compliance suggestions
+ */
+function getEUAIActComplianceSuggestionsContent(
+	suggestions: {
+		title: string;
+		description: string;
+		suggestions: { title: string; description: string; actions?: string[] }[];
+		hasViolation: boolean;
+	},
+	result: EUAIActAnalysisResponse
+): string {
+	const statusStyle = suggestions.hasViolation ?
+		'color: #ff6600; background-color: rgba(255, 165, 0, 0.1); padding: 5px;' :
+		'color: #0066ff; background-color: rgba(0, 100, 255, 0.1); padding: 5px;';
+
+	const suggestionsHtml = suggestions.suggestions.map(suggestion => {
+		const actionsHtml = suggestion.actions ?
+			`<ul class="actions">${suggestion.actions.map(action => `<li>${action}</li>`).join('')}</ul>` :
+			'';
+
+		return `
+			<div class="suggestion">
+				<h3>${suggestion.title}</h3>
+				<p>${suggestion.description}</p>
+				${actionsHtml}
+			</div>
+		`;
+	}).join('');
+
+	return `
+		<!DOCTYPE html>
+		<html lang="en">
+		<head>
+			<meta charset="UTF-8">
+			<meta name="viewport" content="width=device-width, initial-scale=1.0">
+			<title>EU AI Act Compliance Suggestions</title>
+			<style>
+				body {
+					font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+					padding: 20px;
+					line-height: 1.6;
+				}
+				h1 {
+					border-bottom: 1px solid #eaecef;
+					padding-bottom: 10px;
+					margin-bottom: 20px;
+				}
+				h2 {
+					margin-top: 24px;
+					margin-bottom: 16px;
+					font-weight: 600;
+				}
+				h3 {
+					margin-top: 20px;
+					margin-bottom: 10px;
+					font-weight: 600;
+					color: #0066ff;
+				}
+				.status {
+					font-weight: bold;
+					display: inline-block;
+					border-radius: 3px;
+					${statusStyle}
+				}
+				.suggestion {
+					background-color: #f8f9fa;
+					border-left: 4px solid #0066ff;
+					padding: 16px;
+					margin-bottom: 20px;
+					border-radius: 0 3px 3px 0;
+				}
+				.actions {
+					margin-top: 10px;
+					padding-left: 20px;
+				}
+				.actions li {
+					margin-bottom: 5px;
+				}
+				.eu-flag {
+					font-size: 1.2em;
+					margin-right: 5px;
+				}
+				.footer {
+					margin-top: 40px;
+					padding-top: 20px;
+					border-top: 1px solid #eaecef;
+					color: #586069;
+					font-size: 0.9em;
+				}
+			</style>
+		</head>
+		<body>
+			<h1><span class="eu-flag">🇪🇺</span>EU AI Act Compliance Suggestions</h1>
+			
+			<h2>Compliance Status</h2>
+			<div class="status">
+				${suggestions.hasViolation ? '⚠️ Violation Detected' : '✅ Compliant'}
+				${result.article ? ` - ${result.article}` : ''}
+			</div>
+			
+			<h2>${suggestions.title}</h2>
+			<p>${suggestions.description}</p>
+			
+			<div class="suggestions-container">
+				${suggestionsHtml}
+			</div>
+			
+			<div class="footer">
+				<p>These suggestions are based on the EU AI Act requirements. Always consult with legal experts 
+				for comprehensive compliance guidance. The EU AI Act is subject to updates and interpretations.</p>
+			</div>
+		</body>
+		</html>
+	`;
 }
 
 /**
@@ -1391,14 +2045,15 @@ class VulnerabilityScanCodeLensProvider implements vscode.CodeLensProvider {
         // Get analysis results for this document
         const documentUri = document.uri.toString();
         const analysisResults = documentAnalysisResults.get(documentUri) || [];
+        const euAIActResults = documentEUAIActResults.get(documentUri) || [];
         
-        if (analysisResults.length === 0) {
+        if (analysisResults.length === 0 && euAIActResults.length === 0) {
             return [];
         }
         
         const codeLenses: vscode.CodeLens[] = [];
         
-        // Create a CodeLens for each analyzed function
+        // Create a CodeLens for each analyzed function (vulnerability analysis)
         for (const analysisResult of analysisResults) {
             const { functionSymbol, result } = analysisResult;
             
@@ -1422,6 +2077,31 @@ class VulnerabilityScanCodeLensProvider implements vscode.CodeLensProvider {
             
             codeLenses.push(new vscode.CodeLens(range, command));
         }
+
+        // Create CodeLens for EU AI Act results
+        for (const euAIActResult of euAIActResults) {
+            const { functionSymbol, result } = euAIActResult;
+            
+            // Create a range for the function (slightly offset from vulnerability lens)
+            const range = new vscode.Range(
+                functionSymbol.range.start.translate(1, 0),
+                functionSymbol.range.start.translate(1, functionSymbol.name.length + 2)
+            );
+            
+            // Create CodeLens with EU AI Act status
+            const title = result.status === EUAIActViolationStatus.Violation 
+                ? `🇪🇺 EU AI Act Violation: ${result.article || 'Unknown violation'}`
+                : '🇪🇺 EU AI Act Compliant';
+            
+            // Command to show EU AI Act details when clicked
+            const command: vscode.Command = {
+                title,
+                command: 'vulscan.showEUAIActFunctionDetails',
+                arguments: [document.uri.toString(), functionSymbol.range.start.line, result]
+            };
+            
+            codeLenses.push(new vscode.CodeLens(range, command));
+        }
         
         return codeLenses;
     }
@@ -1439,4 +2119,18 @@ async function showFunctionDetails(documentUri: string, line: number, result: An
     
     // Show the detailed explanation
     showDetailedExplanation();
+}
+
+/**
+ * Shows EU AI Act details for a specific function
+ * @param documentUri The URI of the document
+ * @param line The line number of the function
+ * @param result The EU AI Act analysis result
+ */
+async function showEUAIActFunctionDetails(documentUri: string, line: number, result: EUAIActAnalysisResponse): Promise<void> {
+    // Set the last EU AI Act result for the detailed explanation
+    lastEUAIActResult = result;
+    
+    // Show the EU AI Act detailed explanation
+    showEUAIActDetailedExplanation();
 }
