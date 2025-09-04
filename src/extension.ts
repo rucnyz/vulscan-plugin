@@ -420,7 +420,6 @@ ${selectedText}
 	// Register a command to clear all decorations
 	const clearDecorations = vscode.commands.registerCommand('vulscan.clearDecorations', () => {
 		clearAllDecorations();
-		vscode.window.showInformationMessage('Cleared all vulnerability highlights');
 	});
 
 	// Register a command to show detailed explanation
@@ -460,7 +459,6 @@ ${selectedText}
 			if (newApiUrl && newApiUrl !== apiBaseUrl) {
 				apiBaseUrl = newApiUrl;
 				console.log(`Configuration changed: API base URL updated to: ${apiBaseUrl}`);
-				vscode.window.showInformationMessage(`API base URL updated to: ${apiBaseUrl}`);
 			}
 		}
 	});
