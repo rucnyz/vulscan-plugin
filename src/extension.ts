@@ -62,6 +62,9 @@ let lastEUAIActResult: EUAIActAnalysisResponse | null = null;
 // Define a global API base URL
 let apiBaseUrl: string = "https://api.virtueai.io/api/vulscan";
 
+// Store the selected model
+let selectedModel: string = "virtueguard-code";
+
 // Store analysis results by function/method
 interface FunctionAnalysisResult {
     functionSymbol: vscode.DocumentSymbol;
@@ -82,10 +85,12 @@ const documentEUAIActResults = new Map<string, FunctionEUAIActResult[]>();
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
-	// Get API base URL from configuration
+	// Get API base URL and model from configuration
 	const config = vscode.workspace.getConfiguration('vulscan');
 	apiBaseUrl = config.get('apiBaseUrl') as string || apiBaseUrl;
+	selectedModel = config.get('selectedModel') as string || 'virtueguard-code';
 	console.log(`Using API base URL: ${apiBaseUrl}`);
+	console.log(`Using model: ${selectedModel}`);
 
 	// Use the console to output diagnostic information (console.log) and errors (console.error)
 	// This line of code will only be executed once when your extension is activated
@@ -444,6 +449,26 @@ ${selectedText}
 			});
 	});
 
+	// Register a command to select the model
+	const selectModelCommand = vscode.commands.registerCommand('vulscan.selectModel', async () => {
+		const models = [
+			{ label: 'VirtueGuard-Code', value: 'virtueguard-code', description: 'Optimized for security vulnerability detection' },
+			{ label: 'Claude 4 Sonnet', value: 'claude-4-sonnet', description: 'Advanced AI model for comprehensive code analysis' }
+		];
+
+		const selected = await vscode.window.showQuickPick(models, {
+			placeHolder: 'Select an AI model for vulnerability analysis',
+			canPickMany: false
+		});
+
+		if (selected) {
+			const config = vscode.workspace.getConfiguration('vulscan');
+			await config.update('selectedModel', selected.value, vscode.ConfigurationTarget.Global);
+			selectedModel = selected.value;
+			vscode.window.showInformationMessage(`Model switched to: ${selected.label}`);
+		}
+	});
+
 	// Listen for configuration changes
 	const configListener = vscode.workspace.onDidChangeConfiguration((e) => {
 		if (e.affectsConfiguration('vulscan.autoAnalyzeOnSave')) {
@@ -461,6 +486,16 @@ ${selectedText}
 				console.log(`Configuration changed: API base URL updated to: ${apiBaseUrl}`);
 			}
 		}
+
+		// Update selected model when configuration changes
+		if (e.affectsConfiguration('vulscan.selectedModel')) {
+			const config = vscode.workspace.getConfiguration('vulscan');
+			const newModel = config.get('selectedModel') as string;
+			if (newModel && newModel !== selectedModel) {
+				selectedModel = newModel;
+				console.log(`Configuration changed: Model updated to: ${selectedModel}`);
+			}
+		}
 	});
 
 	// Add all subscriptions
@@ -472,6 +507,7 @@ ${selectedText}
 		showDetailsCommand,
 		showEUAIActDetailsCommand,
 		toggleAutoAnalyzeCommand,
+		selectModelCommand,
 		configListener
 	);
 
@@ -599,8 +635,8 @@ async function analyzeCodeForVulnerabilities(code: string): Promise<AnalysisResu
 			reject(new Error(`API request failed: ${error.message}`));
 		});
 
-		// Send the code to analyze
-		const requestBody = JSON.stringify({ code });
+		// Send the code and model to analyze
+		const requestBody = JSON.stringify({ code, model: selectedModel });
 		req.write(requestBody);
 		req.end();
 	});
@@ -658,8 +694,8 @@ async function analyzeCodeForEUAIAct(code: string): Promise<EUAIActAnalysisResul
 			reject(new Error(`API request failed: ${error.message}`));
 		});
 
-		// Send the code to analyze
-		const requestBody = JSON.stringify({ code });
+		// Send the code and model to analyze
+		const requestBody = JSON.stringify({ code, model: selectedModel });
 		req.write(requestBody);
 		req.end();
 	});
@@ -1986,10 +2022,11 @@ async function extractDependencies(code: string, round: number): Promise<Extract
 			reject(new Error(`API request failed: ${error.message}`));
 		});
 
-		// Send the code and round information to the API
+		// Send the code, round, and model information to the API
 		const requestBody = JSON.stringify({
 			code,
-			round
+			round,
+			model: selectedModel
 		});
 		req.write(requestBody);
 		req.end();
