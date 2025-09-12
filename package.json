@@ -3,7 +3,7 @@
     "name": "virtueguard-code",
     "displayName": "VirtueGuard-Code",
     "description": "A VSCode extension that scans code for vulnerabilities",
-    "version": "0.0.8",
+    "version": "0.0.9",
     "publisher": "virtueai",
     "repository": {
         "type": "git",
@@ -75,7 +75,11 @@
                 "vulscan.selectedModel": {
                     "type": "string",
                     "default": "virtueguard-code",
-                    "enum": ["virtueguard-code", "claude-4-sonnet", "gpt-4.1"],
+                    "enum": [
+                        "virtueguard-code",
+                        "claude-4-sonnet",
+                        "gpt-4.1"
+                    ],
                     "enumDescriptions": [
                         "VirtueGuard-Code: Optimized for security vulnerability detection",
                         "Claude 4 Sonnet: Advanced AI model for comprehensive code analysis",
@@ -97,21 +101,22 @@
         "compile": "tsc -p ./",
         "watch": "tsc -watch -p ./",
         "pretest": "npm run compile && npm run lint",
-        "lint": "eslint src --ext ts",
+        "lint": "eslint src",
         "test": "node ./out/test/runTest.js"
     },
     "devDependencies": {
-        "@types/vscode": "^1.80.0",
-        "@types/glob": "^8.1.0",
         "@types/mocha": "^10.0.1",
         "@types/node": "20.2.5",
-        "@typescript-eslint/eslint-plugin": "^5.59.8",
-        "@typescript-eslint/parser": "^5.59.8",
+        "@types/sinon": "^10.0.16",
+        "@types/vscode": "^1.80.0",
+        "@typescript-eslint/eslint-plugin": "^6.21.0",
+        "@typescript-eslint/parser": "^6.21.0",
+        "@vscode/test-electron": "^2.3.2",
         "eslint": "^8.41.0",
-        "glob": "^8.1.0",
+        "glob": "^11.0.3",
         "mocha": "^10.2.0",
-        "typescript": "^5.1.3",
-        "@vscode/test-electron": "^2.3.2"
+        "sinon": "^15.2.0",
+        "typescript": "^5.1.3"
     },
     "license": "MIT"
 }

@@ -55,6 +55,23 @@ let selectedModel: string = "virtueguard-code";
 // Store the API key
 let apiKey: string = "";
 
+// Export for testing
+export function setApiKeyForTesting(key: string) {
+	apiKey = key;
+}
+
+// Rate limit information
+interface RateLimitInfo {
+	limit: number;
+	remaining: number;
+	reset: number;
+}
+
+let currentRateLimit: RateLimitInfo | null = null;
+
+// Status bar item for rate limit info
+let rateLimitStatusBarItem: vscode.StatusBarItem;
+
 // Store analysis results by function/method
 interface FunctionAnalysisResult {
 	functionSymbol: vscode.DocumentSymbol;
@@ -80,6 +97,12 @@ export function activate(context: vscode.ExtensionContext) {
 	// Use the console to output diagnostic information (console.log) and errors (console.error)
 	// This line of code will only be executed once when your extension is activated
 	console.log('Congratulations, your extension "vulscan" is now active!');
+
+	// Create status bar item for rate limit info
+	rateLimitStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+	rateLimitStatusBarItem.command = 'vulscan.showRateLimitInfo';
+	context.subscriptions.push(rateLimitStatusBarItem);
+	updateRateLimitStatusBar();
 
 	// Register document save event listener for automatic analysis
 	// Moving this up to initialize it before other commands
@@ -131,9 +154,9 @@ export function activate(context: vscode.ExtensionContext) {
 			}, async (progress) => {
 				let round = 1;
 				let isDone = false;
-				const MAX_ROUNDS = 5;
+				const maxRounds = 5;
 
-				while (!isDone && round <= MAX_ROUNDS) {
+				while (!isDone && round <= maxRounds) {
 					// Extract dependencies for current round
 					const result = await extractDependencies(selectedText, round);
 
@@ -149,7 +172,7 @@ export function activate(context: vscode.ExtensionContext) {
 					round++;
 				}
 
-				if (round > MAX_ROUNDS && !isDone) {
+				if (round > maxRounds && !isDone) {
 					progress.report({ message: "Reached maximum extraction rounds" });
 				}
 			});
@@ -462,6 +485,26 @@ ${selectedText}
 		}
 	});
 
+	// Register command to show rate limit info
+	const showRateLimitInfoCommand = vscode.commands.registerCommand('vulscan.showRateLimitInfo', () => {
+		if (currentRateLimit) {
+			const resetTime = new Date(currentRateLimit.reset * 1000).toLocaleString();
+			const percentage = Math.floor((currentRateLimit.remaining / currentRateLimit.limit) * 100);
+			
+			vscode.window.showInformationMessage(
+				`API Rate Limit Status:\n` +
+				`• Remaining: ${currentRateLimit.remaining} out of ${currentRateLimit.limit} requests (${percentage}%)\n` +
+				`• Resets at: ${resetTime}`,
+				{ modal: false }
+			);
+		} else {
+			vscode.window.showInformationMessage(
+				'API rate limit status is unknown. Make an API request to see current status.',
+				{ modal: false }
+			);
+		}
+	});
+
 	// Listen for configuration changes
 	const configListener = vscode.workspace.onDidChangeConfiguration((e) => {
 		if (e.affectsConfiguration('vulscan.autoAnalyzeOnSave')) {
@@ -511,6 +554,7 @@ ${selectedText}
 		showEUAIActDetailsCommand,
 		toggleAutoAnalyzeCommand,
 		selectModelCommand,
+		showRateLimitInfoCommand,
 		configListener
 	);
 
@@ -587,11 +631,134 @@ function clearAllDecorations() {
 }
 
 /**
- * Send the code to an API for vulnerability analysis
+ * Parse rate limit headers from the API response
+ * @param headers HTTP response headers
+ * @returns Parsed rate limit information or null
+ */
+function parseRateLimitHeaders(headers: any): RateLimitInfo | null {
+	const limit = headers['x-ratelimit-limit'];
+	const remaining = headers['x-ratelimit-remaining'];
+	const reset = headers['x-ratelimit-reset'];
+
+	if (limit !== undefined && remaining !== undefined && reset !== undefined) {
+		return {
+			limit: parseInt(limit),
+			remaining: parseInt(remaining),
+			reset: parseInt(reset)
+		};
+	}
+
+	return null;
+}
+
+/**
+ * Check if we should show rate limit warning
+ * @returns true if should show warning
+ */
+function shouldShowRateLimitWarning(): boolean {
+	if (!currentRateLimit) {
+		return false;
+	}
+	
+	// Show warning when remaining requests are low (less than 10% of limit)
+	const warningThreshold = Math.max(1, Math.floor(currentRateLimit.limit * 0.1));
+	return currentRateLimit.remaining <= warningThreshold;
+}
+
+/**
+ * Update the rate limit status bar item
+ */
+function updateRateLimitStatusBar() {
+	if (!rateLimitStatusBarItem) {
+		return;
+	}
+
+	if (currentRateLimit) {
+		const { remaining, limit } = currentRateLimit;
+		const percentage = Math.floor((remaining / limit) * 100);
+		
+		// Choose icon and color based on remaining percentage
+		let icon = '$(pass)'; // Green checkmark
+		let color = undefined; // Default color
+		
+		if (percentage <= 10) {
+			icon = '$(error)'; // Red error icon
+			color = new vscode.ThemeColor('statusBarItem.errorForeground');
+		} else if (percentage <= 25) {
+			icon = '$(warning)'; // Yellow warning icon
+			color = new vscode.ThemeColor('statusBarItem.warningForeground');
+		}
+		
+		rateLimitStatusBarItem.text = `${icon} API: ${remaining}/${limit}`;
+		rateLimitStatusBarItem.color = color;
+		rateLimitStatusBarItem.tooltip = `API Rate Limit: ${remaining} requests remaining out of ${limit}. Resets at ${new Date(currentRateLimit.reset * 1000).toLocaleTimeString()}`;
+		rateLimitStatusBarItem.show();
+	} else {
+		rateLimitStatusBarItem.text = '$(question) API: Unknown';
+		rateLimitStatusBarItem.color = undefined;
+		rateLimitStatusBarItem.tooltip = 'API rate limit status unknown. Make an API call to see current status.';
+		rateLimitStatusBarItem.show();
+	}
+}
+
+/**
+ * Sleep for specified number of milliseconds
+ * @param ms Milliseconds to sleep
+ */
+function sleep(ms: number): Promise<void> {
+	return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Make API request with retry logic for rate limits
+ * @param makeRequest Function to make the API request
+ * @param maxRetries Maximum number of retries
+ * @returns Promise with the API result
+ */
+async function makeRequestWithRetry<T>(
+	makeRequest: () => Promise<T>, 
+	maxRetries: number = 2
+): Promise<T> {
+	let lastError: Error | undefined;
+	
+	for (let attempt = 0; attempt <= maxRetries; attempt++) {
+		try {
+			return await makeRequest();
+		} catch (error: any) {
+			lastError = error;
+			
+			// Check if it's a rate limit error
+			if (error.message.includes('Rate limit exceeded') && attempt < maxRetries) {
+				// Extract retry delay from error message or use default
+				const retryMatch = error.message.match(/Try again in (\d+) seconds/);
+				const retryDelay = retryMatch ? parseInt(retryMatch[1]) * 1000 : 60000; // Default 60 seconds
+				
+				console.log(`Rate limit hit, retrying in ${retryDelay}ms (attempt ${attempt + 1}/${maxRetries + 1})`);
+				
+				// Show notification about retry
+				vscode.window.showInformationMessage(
+					`Rate limit hit. Retrying in ${retryDelay / 1000} seconds... (attempt ${attempt + 1}/${maxRetries + 1})`
+				);
+				
+				await sleep(retryDelay);
+				continue;
+			}
+			
+			// If it's not a rate limit error or we've exhausted retries, throw the error
+			throw error;
+		}
+	}
+	
+	throw new Error(lastError?.message || 'Unknown error occurred');
+
+}
+
+/**
+ * Internal function to make vulnerability analysis request (without retry)
  * @param code The code to analyze
  * @returns Analysis result
  */
-async function analyzeCodeForVulnerabilities(code: string): Promise<AnalysisResult> {
+async function analyzeCodeForVulnerabilitiesInternal(code: string): Promise<AnalysisResult> {
 	// Get the full API URL for analyze endpoint
 	const apiUrl = `${apiBaseUrl}/analyze`;
 
@@ -617,7 +784,30 @@ async function analyzeCodeForVulnerabilities(code: string): Promise<AnalysisResu
 		const req = http.request(options, (res: any) => {
 			let data = '';
 
-			// Handle HTTP status errors
+			// Parse rate limit headers
+			const rateLimitHeaders = parseRateLimitHeaders(res.headers);
+			if (rateLimitHeaders) {
+				currentRateLimit = rateLimitHeaders;
+				console.log('Rate limit info:', currentRateLimit);
+				updateRateLimitStatusBar();
+			}
+
+			// Handle 429 Too Many Requests
+			if (res.statusCode === 429) {
+				const retryAfter = res.headers['retry-after'];
+				const rateLimitInfo = parseRateLimitHeaders(res.headers);
+				
+				// Show rate limit error with retry information
+				const retryMessage = retryAfter 
+					? `Rate limit exceeded. Try again in ${retryAfter} seconds.`
+					: 'Rate limit exceeded. Please try again later.';
+				
+				vscode.window.showWarningMessage(retryMessage);
+				
+				return reject(new Error(`Rate limit exceeded. ${retryMessage}`));
+			}
+
+			// Handle other HTTP status errors
 			if (res.statusCode < 200 || res.statusCode >= 300) {
 				return reject(new Error(`API responded with status code ${res.statusCode}`));
 			}
@@ -629,6 +819,14 @@ async function analyzeCodeForVulnerabilities(code: string): Promise<AnalysisResu
 			res.on('end', () => {
 				try {
 					const response = JSON.parse(data);
+					
+					// Show rate limit warning if approaching limit
+					if (shouldShowRateLimitWarning() && currentRateLimit) {
+						vscode.window.showWarningMessage(
+							`API Rate Limit Warning: Only ${currentRateLimit.remaining} requests remaining out of ${currentRateLimit.limit}. Resets at ${new Date(currentRateLimit.reset * 1000).toLocaleTimeString()}.`
+						);
+					}
+					
 					resolve(response);
 				} catch (e) {
 					reject(new Error(`Failed to parse API response: ${e}`));
@@ -647,6 +845,14 @@ async function analyzeCodeForVulnerabilities(code: string): Promise<AnalysisResu
 	});
 }
 
+/**
+ * Send the code to an API for vulnerability analysis (with retry logic)
+ * @param code The code to analyze
+ * @returns Analysis result
+ */
+async function analyzeCodeForVulnerabilities(code: string): Promise<AnalysisResult> {
+	return await makeRequestWithRetry(() => analyzeCodeForVulnerabilitiesInternal(code));
+}
 
 /**
  * Get the appropriate decoration type based on analysis result
@@ -1135,12 +1341,12 @@ export function deactivate() {
 }
 
 /**
- * Extract dependencies from code by making an API call
+ * Internal function to extract dependencies from code (without retry)
  * @param code The code to analyze
  * @param round The round number (starting from 1)
  * @returns Object containing dependencies array and done flag
  */
-async function extractDependencies(code: string, round: number): Promise<ExtractResponse> {
+async function extractDependenciesInternal(code: string, round: number): Promise<ExtractResponse> {
 	// Get the full API URL for extract endpoint
 	const apiUrl = `${apiBaseUrl}/extract`;
 
@@ -1163,7 +1369,21 @@ async function extractDependencies(code: string, round: number): Promise<Extract
 		const req = http.request(options, (res: any) => {
 			let data = '';
 
-			// Handle HTTP status errors
+			// Handle 429 Too Many Requests
+			if (res.statusCode === 429) {
+				const retryAfter = res.headers['retry-after'];
+				
+				// Show rate limit error with retry information
+				const retryMessage = retryAfter 
+					? `Rate limit exceeded. Try again in ${retryAfter} seconds.`
+					: 'Rate limit exceeded. Please try again later.';
+				
+				vscode.window.showWarningMessage(retryMessage);
+				
+				return reject(new Error(`Rate limit exceeded. ${retryMessage}`));
+			}
+
+			// Handle other HTTP status errors
 			if (res.statusCode < 200 || res.statusCode >= 300) {
 				return reject(new Error(`API responded with status code ${res.statusCode}`));
 			}
@@ -1204,6 +1424,16 @@ async function extractDependencies(code: string, round: number): Promise<Extract
 		req.write(requestBody);
 		req.end();
 	});
+}
+
+/**
+ * Extract dependencies from code by making an API call (with retry logic)
+ * @param code The code to analyze
+ * @param round The round number (starting from 1)
+ * @returns Object containing dependencies array and done flag
+ */
+async function extractDependencies(code: string, round: number): Promise<ExtractResponse> {
+	return await makeRequestWithRetry(() => extractDependenciesInternal(code, round));
 }
 
 /**

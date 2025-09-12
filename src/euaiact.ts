@@ -34,14 +34,65 @@ let lastEUAIActResult: EUAIActAnalysisResponse | null = null;
 export const documentEUAIActResults = new Map<string, FunctionEUAIActResult[]>();
 
 /**
- * Send the code to an API for EU AI Act analysis
+ * Sleep for specified number of milliseconds
+ * @param ms Milliseconds to sleep
+ */
+function sleep(ms: number): Promise<void> {
+	return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Make API request with retry logic for rate limits
+ * @param makeRequest Function to make the API request
+ * @param maxRetries Maximum number of retries
+ * @returns Promise with the API result
+ */
+async function makeRequestWithRetry<T>(
+	makeRequest: () => Promise<T>, 
+	maxRetries: number = 2
+): Promise<T> {
+	let lastError: Error | undefined;
+	
+	for (let attempt = 0; attempt <= maxRetries; attempt++) {
+		try {
+			return await makeRequest();
+		} catch (error: any) {
+			lastError = error;
+			
+			// Check if it's a rate limit error
+			if (error.message.includes('Rate limit exceeded') && attempt < maxRetries) {
+				// Extract retry delay from error message or use default
+				const retryMatch = error.message.match(/Try again in (\d+) seconds/);
+				const retryDelay = retryMatch ? parseInt(retryMatch[1]) * 1000 : 60000; // Default 60 seconds
+				
+				console.log(`Rate limit hit, retrying in ${retryDelay}ms (attempt ${attempt + 1}/${maxRetries + 1})`);
+				
+				// Show notification about retry
+				vscode.window.showInformationMessage(
+					`Rate limit hit. Retrying in ${retryDelay / 1000} seconds... (attempt ${attempt + 1}/${maxRetries + 1})`
+				);
+				
+				await sleep(retryDelay);
+				continue;
+			}
+			
+			// If it's not a rate limit error or we've exhausted retries, throw the error
+			throw error;
+		}
+	}
+	
+	throw new Error(lastError?.message || 'Unknown error occurred');
+}
+
+/**
+ * Internal function to send the code to an API for EU AI Act analysis (without retry)
  * @param code The code to analyze
  * @param apiBaseUrl The base URL for the API
  * @param selectedModel The selected model for analysis
  * @param apiKey The API key for authentication
  * @returns EU AI Act analysis result
  */
-export async function analyzeCodeForEUAIAct(code: string, apiBaseUrl: string, selectedModel: string, apiKey: string): Promise<EUAIActAnalysisResult> {
+async function analyzeCodeForEUAIActInternal(code: string, apiBaseUrl: string, selectedModel: string, apiKey: string): Promise<EUAIActAnalysisResult> {
 	// Get the full API URL for EU AI Act analyze endpoint
 	const apiUrl = `${apiBaseUrl}/analyze-eu-ai-act`;
 
@@ -67,7 +118,21 @@ export async function analyzeCodeForEUAIAct(code: string, apiBaseUrl: string, se
 		const req = http.request(options, (res: any) => {
 			let data = '';
 
-			// Handle HTTP status errors
+			// Handle 429 Too Many Requests
+			if (res.statusCode === 429) {
+				const retryAfter = res.headers['retry-after'];
+				
+				// Show rate limit error with retry information
+				const retryMessage = retryAfter 
+					? `Rate limit exceeded. Try again in ${retryAfter} seconds.`
+					: 'Rate limit exceeded. Please try again later.';
+				
+				vscode.window.showWarningMessage(retryMessage);
+				
+				return reject(new Error(`Rate limit exceeded. ${retryMessage}`));
+			}
+
+			// Handle other HTTP status errors
 			if (res.statusCode < 200 || res.statusCode >= 300) {
 				return reject(new Error(`API responded with status code ${res.statusCode}`));
 			}
@@ -95,6 +160,18 @@ export async function analyzeCodeForEUAIAct(code: string, apiBaseUrl: string, se
 		req.write(requestBody);
 		req.end();
 	});
+}
+
+/**
+ * Send the code to an API for EU AI Act analysis (with retry logic)
+ * @param code The code to analyze
+ * @param apiBaseUrl The base URL for the API
+ * @param selectedModel The selected model for analysis
+ * @param apiKey The API key for authentication
+ * @returns EU AI Act analysis result
+ */
+export async function analyzeCodeForEUAIAct(code: string, apiBaseUrl: string, selectedModel: string, apiKey: string): Promise<EUAIActAnalysisResult> {
+	return await makeRequestWithRetry(() => analyzeCodeForEUAIActInternal(code, apiBaseUrl, selectedModel, apiKey));
 }
 
 /**
