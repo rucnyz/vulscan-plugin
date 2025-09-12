@@ -82,6 +82,12 @@
                         "GPT-4.1: Advanced AI model for comprehensive code analysis"
                     ],
                     "description": "Select the AI model to use for vulnerability analysis."
+                },
+                "vulscan.apiKey": {
+                    "type": "string",
+                    "default": "",
+                    "description": "API key for authentication with the vulnerability analysis service. Get your API key by booking a demo: https://meetings.hubspot.com/shekhar-bapat",
+                    "markdownDescription": "API key for authentication with the vulnerability analysis service. Get your API key by [booking a demo](https://meetings.hubspot.com/shekhar-bapat)."
                 }
             }
         }

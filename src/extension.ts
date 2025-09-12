@@ -1,5 +1,14 @@
 import * as vscode from 'vscode';
-import * as https from 'https';
+import {
+	EUAIActViolationStatus,
+	EUAIActAnalysisResponse,
+	documentEUAIActResults,
+	analyzeCodeForEUAIAct,
+	getEUAIActDecorationForResult,
+	showEUAIActDetailedExplanation,
+	showEUAIActFunctionDetails,
+	getDocumentSymbols as getDocumentSymbols
+} from './euaiact';
 
 // Define enum for vulnerability status
 enum VulnerabilityStatus {
@@ -7,26 +16,10 @@ enum VulnerabilityStatus {
 	Vulnerable = 'yes'
 }
 
-// Define enum for EU AI Act violation status
-enum EUAIActViolationStatus {
-	NoViolation = 'no',
-	Violation = 'yes'
-}
-
 // Define interfaces for the analysis result
 interface AnalysisResponse {
 	status: VulnerabilityStatus;
 	cweType?: string;
-	model?: string;
-	response?: string;
-	usage?: any;
-}
-
-// Define interfaces for EU AI Act analysis
-interface EUAIActAnalysisResponse {
-	status: EUAIActViolationStatus;
-	violationType?: string;
-	article?: string;
 	model?: string;
 	response?: string;
 	usage?: any;
@@ -42,11 +35,6 @@ interface AnalysisResult {
 	status: 'success' | 'error';
 }
 
-interface EUAIActAnalysisResult {
-	result: EUAIActAnalysisResponse;
-	status: 'success' | 'error';
-}
-
 interface ExtractResult {
 	result: ExtractResponse;
 	status: 'success' | 'error';
@@ -57,7 +45,6 @@ let activeDecorations: vscode.TextEditorDecorationType[] = [];
 
 // Store the latest analysis result for showing detailed explanation
 let lastAnalysisResult: AnalysisResponse | null = null;
-let lastEUAIActResult: EUAIActAnalysisResponse | null = null;
 
 // Define a global API base URL
 let apiBaseUrl: string = "https://api.virtueai.io/api/vulscan";
@@ -65,32 +52,30 @@ let apiBaseUrl: string = "https://api.virtueai.io/api/vulscan";
 // Store the selected model
 let selectedModel: string = "virtueguard-code";
 
+// Store the API key
+let apiKey: string = "";
+
 // Store analysis results by function/method
 interface FunctionAnalysisResult {
-    functionSymbol: vscode.DocumentSymbol;
-    result: AnalysisResponse;
-    codeHash: string; // Add this field to track code changes
-}
-
-interface FunctionEUAIActResult {
-    functionSymbol: vscode.DocumentSymbol;
-    result: EUAIActAnalysisResponse;
-    codeHash: string;
+	functionSymbol: vscode.DocumentSymbol;
+	result: AnalysisResponse;
+	codeHash: string; // Add this field to track code changes
 }
 
 // Map to store analysis results by document URI
 const documentAnalysisResults = new Map<string, FunctionAnalysisResult[]>();
-const documentEUAIActResults = new Map<string, FunctionEUAIActResult[]>();
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
-	// Get API base URL and model from configuration
+	// Get API base URL, model, and API key from configuration
 	const config = vscode.workspace.getConfiguration('vulscan');
 	apiBaseUrl = config.get('apiBaseUrl') as string || apiBaseUrl;
 	selectedModel = config.get('selectedModel') as string || 'virtueguard-code';
+	apiKey = config.get('apiKey') as string || '';
 	console.log(`Using API base URL: ${apiBaseUrl}`);
 	console.log(`Using model: ${selectedModel}`);
+	console.log(`API key configured: ${apiKey ? 'Yes' : 'No'}`);
 
 	// Use the console to output diagnostic information (console.log) and errors (console.error)
 	// This line of code will only be executed once when your extension is activated
@@ -106,12 +91,23 @@ export function activate(context: vscode.ExtensionContext) {
 		console.log(`Auto-analyze on save: ${autoAnalyzeOnSave}`);
 
 		if (autoAnalyzeOnSave) {
+			// Check if API key is configured
+			if (!apiKey) {
+				vscode.window.showWarningMessage('Auto-analysis disabled: API key is required. Please configure it in settings (vulscan.apiKey).');
+				return;
+			}
 			await analyzeDocumentOnSave(document);
 		}
 	});
 
 	// Register a command to analyze selected code for vulnerabilities
 	const analyzeCodeCommand = vscode.commands.registerCommand('vulscan.analyzeCode', async () => {
+		// Check if API key is configured
+		if (!apiKey) {
+			vscode.window.showErrorMessage('API key is required. Please configure it in VS Code settings (vulscan.apiKey).');
+			return;
+		}
+
 		const editor = vscode.window.activeTextEditor;
 		if (!editor) {
 			vscode.window.showInformationMessage('No editor is active');
@@ -285,25 +281,20 @@ ${selectedText}
 					vscode.window.showErrorMessage(
 						`Vulnerability detected: ${pred.cweType}`,
 						{ modal: false },
-						'Show Details',
-						'Suggestions for Improvement'
+						'Show Details'
 					).then(selection => {
 						if (selection === 'Show Details') {
 							showDetailedExplanation();
-						} else if (selection === 'Suggestions for Improvement') {
-							showImprovementSuggestions(pred);
 						}
 					});
 				} else {
 					vscode.window.showInformationMessage(
 						'Code appears to be benign',
 						{ modal: false },
-						'Show Details',
+						'Show Details'
 					).then(selection => {
 						if (selection === 'Show Details') {
 							showDetailedExplanation();
-						} else if (selection === 'Suggestions for Improvement') {
-							showImprovementSuggestions(pred);
 						}
 					});
 				}
@@ -315,6 +306,12 @@ ${selectedText}
 
 	// Register a command to analyze selected code for EU AI Act compliance
 	const analyzeEUAIActCommand = vscode.commands.registerCommand('vulscan.analyzeEUAIAct', async () => {
+		// Check if API key is configured
+		if (!apiKey) {
+			vscode.window.showErrorMessage('API key is required. Please configure it in VS Code settings (vulscan.apiKey).');
+			return;
+		}
+
 		const editor = vscode.window.activeTextEditor;
 		if (!editor) {
 			vscode.window.showInformationMessage('No editor is active');
@@ -329,7 +326,7 @@ ${selectedText}
 
 		const selectedText = editor.document.getText(selection);
 		vscode.window.showInformationMessage('Analyzing code for EU AI Act compliance...');
-		
+
 		try {
 			await vscode.window.withProgress({
 				location: vscode.ProgressLocation.Notification,
@@ -339,7 +336,7 @@ ${selectedText}
 				// Gather implementations similar to vulnerability analysis
 				const implementationsPromises: Promise<string>[] = [];
 				const symbols = await getDocumentSymbols(editor.document);
-				
+
 				const symbolsInSelection = symbols.filter(symbol =>
 					selection.contains(symbol.range) ||
 					symbol.range.contains(selection) ||
@@ -384,11 +381,10 @@ ${implementationsText}
 ${selectedText}
 `;
 
-				const result = await analyzeCodeForEUAIAct(codeToAnalyze);
+				const result = await analyzeCodeForEUAIAct(codeToAnalyze, apiBaseUrl, selectedModel, apiKey);
 				const pred = result.result;
-				lastEUAIActResult = pred;
-				
-				const decorationType = getEUAIActDecorationForResult(pred);
+
+				const decorationType = getEUAIActDecorationForResult(pred, activeDecorations);
 				editor.setDecorations(decorationType, [selection]);
 
 				// Display the result
@@ -396,13 +392,10 @@ ${selectedText}
 					vscode.window.showErrorMessage(
 						`EU AI Act Violation: ${pred.article}`,
 						{ modal: false },
-						'Show Details',
-						'Compliance Suggestions'
+						'Show Details'
 					).then(selection => {
 						if (selection === 'Show Details') {
 							showEUAIActDetailedExplanation();
-						} else if (selection === 'Compliance Suggestions') {
-							showEUAIActComplianceSuggestions(pred);
 						}
 					});
 				} else {
@@ -476,7 +469,7 @@ ${selectedText}
 			const autoAnalyzeOnSave = config.get('autoAnalyzeOnSave') as boolean || false;
 			console.log(`Configuration changed: Auto-analyze on save: ${autoAnalyzeOnSave}`);
 		}
-		
+
 		// Update API base URL when configuration changes
 		if (e.affectsConfiguration('vulscan.apiBaseUrl')) {
 			const config = vscode.workspace.getConfiguration('vulscan');
@@ -494,6 +487,16 @@ ${selectedText}
 			if (newModel && newModel !== selectedModel) {
 				selectedModel = newModel;
 				console.log(`Configuration changed: Model updated to: ${selectedModel}`);
+			}
+		}
+
+		// Update API key when configuration changes
+		if (e.affectsConfiguration('vulscan.apiKey')) {
+			const config = vscode.workspace.getConfiguration('vulscan');
+			const newApiKey = config.get('apiKey') as string || '';
+			if (newApiKey !== apiKey) {
+				apiKey = newApiKey;
+				console.log(`Configuration changed: API key updated: ${apiKey ? 'Yes' : 'No'}`);
 			}
 		}
 	});
@@ -548,13 +551,13 @@ ${selectedText}
 		{ scheme: 'file' },
 		codeLensProvider
 	);
-	
+
 	// Add CodeLens provider to subscriptions
 	context.subscriptions.push(codeLensProviderDisposable);
 
 	// Register command to show function details from CodeLens
 	const showFunctionDetailsCommand = vscode.commands.registerCommand(
-		'vulscan.showFunctionDetails', 
+		'vulscan.showFunctionDetails',
 		(documentUri: string, line: number, result: AnalysisResponse) => {
 			showFunctionDetails(documentUri, line, result);
 		}
@@ -562,12 +565,12 @@ ${selectedText}
 
 	// Register command to show EU AI Act function details from CodeLens
 	const showEUAIActFunctionDetailsCommand = vscode.commands.registerCommand(
-		'vulscan.showEUAIActFunctionDetails', 
+		'vulscan.showEUAIActFunctionDetails',
 		(documentUri: string, line: number, result: EUAIActAnalysisResponse) => {
 			showEUAIActFunctionDetails(documentUri, line, result);
 		}
 	);
-	
+
 	// Add commands to subscriptions
 	context.subscriptions.push(showFunctionDetailsCommand);
 	context.subscriptions.push(showEUAIActFunctionDetailsCommand);
@@ -605,7 +608,9 @@ async function analyzeCodeForVulnerabilities(code: string): Promise<AnalysisResu
 			path: urlObj.pathname,
 			method: 'POST',
 			headers: {
-				'Content-Type': 'application/json'
+				'Content-Type': 'application/json',
+				'Authorization': `Bearer ${apiKey}`,
+				'X-API-Key': apiKey
 			}
 		};
 
@@ -642,64 +647,6 @@ async function analyzeCodeForVulnerabilities(code: string): Promise<AnalysisResu
 	});
 }
 
-/**
- * Send the code to an API for EU AI Act analysis
- * @param code The code to analyze
- * @returns EU AI Act analysis result
- */
-async function analyzeCodeForEUAIAct(code: string): Promise<EUAIActAnalysisResult> {
-	// Get the full API URL for EU AI Act analyze endpoint
-	const apiUrl = `${apiBaseUrl}/analyze-eu-ai-act`;
-
-	return new Promise((resolve, reject) => {
-		// Parse URL to determine if http or https should be used
-		const isHttps = apiUrl.startsWith('https');
-		const http = isHttps ? require('https') : require('http');
-
-		const urlObj = new URL(apiUrl);
-
-		const options = {
-			hostname: urlObj.hostname,
-			port: urlObj.port || (isHttps ? 443 : 80),
-			path: urlObj.pathname,
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json'
-			}
-		};
-
-		const req = http.request(options, (res: any) => {
-			let data = '';
-
-			// Handle HTTP status errors
-			if (res.statusCode < 200 || res.statusCode >= 300) {
-				return reject(new Error(`API responded with status code ${res.statusCode}`));
-			}
-
-			res.on('data', (chunk: any) => {
-				data += chunk;
-			});
-
-			res.on('end', () => {
-				try {
-					const response = JSON.parse(data);
-					resolve(response);
-				} catch (e) {
-					reject(new Error(`Failed to parse API response: ${e}`));
-				}
-			});
-		});
-
-		req.on('error', (error: any) => {
-			reject(new Error(`API request failed: ${error.message}`));
-		});
-
-		// Send the code and model to analyze
-		const requestBody = JSON.stringify({ code, model: selectedModel });
-		req.write(requestBody);
-		req.end();
-	});
-}
 
 /**
  * Get the appropriate decoration type based on analysis result
@@ -730,34 +677,6 @@ function getDecorationForResult(result: AnalysisResponse): vscode.TextEditorDeco
 	return decorationType;
 }
 
-/**
- * Get the appropriate decoration type based on EU AI Act analysis result
- */
-function getEUAIActDecorationForResult(result: EUAIActAnalysisResponse): vscode.TextEditorDecorationType {
-	let decorationType;
-	if (result.status === EUAIActViolationStatus.Violation) {
-		// Create a custom decoration for this specific EU AI Act violation
-		decorationType = vscode.window.createTextEditorDecorationType({
-			backgroundColor: 'rgba(255, 165, 0, 0.2)', // Orange for EU AI Act violations
-			after: {
-				contentText: ` 🇪🇺 ${result.article || 'EU AI Act Violation'}`,
-				color: 'orange'
-			}
-		});
-	} else {
-		decorationType = vscode.window.createTextEditorDecorationType({
-			backgroundColor: 'rgba(0, 100, 255, 0.2)', // Blue for compliance
-			after: {
-				contentText: ' 🇪🇺 Compliant',
-				color: 'blue'
-			}
-		});
-	}
-
-	// Add to active decorations for tracking
-	activeDecorations.push(decorationType);
-	return decorationType;
-}
 
 /**
  * Shows detailed explanation of the last analysis result in a read-only editor
@@ -815,130 +734,6 @@ function showDetailedExplanation() {
 	panel.webview.html = getWebviewContent(lastAnalysisResult);
 }
 
-/**
- * Shows detailed explanation of the last EU AI Act analysis result
- */
-function showEUAIActDetailedExplanation() {
-	if (!lastEUAIActResult || !lastEUAIActResult.response) {
-		vscode.window.showInformationMessage('No EU AI Act analysis details available.');
-		return;
-	}
-
-	// Create a read-only webview panel to display the explanation
-	const panel = vscode.window.createWebviewPanel(
-		'euAIActDetails',
-		'EU AI Act Compliance Analysis',
-		vscode.ViewColumn.Beside,
-		{
-			enableScripts: true,
-			localResourceRoots: [],
-			retainContextWhenHidden: true
-		}
-	);
-
-	// Set HTML content with the formatted explanation
-	panel.webview.html = getEUAIActWebviewContent(lastEUAIActResult);
-}
-
-/**
- * Format the HTML content for the EU AI Act webview panel
- */
-function getEUAIActWebviewContent(result: EUAIActAnalysisResponse): string {
-	const violationStyle = 'color: #ff6600; background-color: rgba(255, 165, 0, 0.1); padding: 5px;';
-	const compliantStyle = 'color: #0066ff; background-color: rgba(0, 100, 255, 0.1); padding: 5px;';
-	const statusStyle = result.status === EUAIActViolationStatus.Violation ? violationStyle : compliantStyle;
-	const statusEmoji = result.status === EUAIActViolationStatus.Violation ? '⚠️' : '✅';
-	const statusText = result.status === EUAIActViolationStatus.Violation ? 'Violation Detected' : 'Compliant';
-
-	return `
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>EU AI Act Compliance Analysis</title>
-            <style>
-                body {
-                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
-                    padding: 20px;
-                    line-height: 1.6;
-                }
-                h1 {
-                    border-bottom: 1px solid #eaecef;
-                    padding-bottom: 10px;
-                    margin-bottom: 20px;
-                }
-                h2 {
-                    margin-top: 24px;
-                    margin-bottom: 16px;
-                    font-weight: 600;
-                }
-                .status {
-                    font-weight: bold;
-                    display: inline-block;
-                    border-radius: 3px;
-                    ${statusStyle}
-                }
-                .explanation {
-                    background-color: #f6f8fa;
-                    border-radius: 3px;
-                    padding: 16px;
-                }
-                pre {
-                    background-color: #f3f3f3;
-                    padding: 10px;
-                    border-radius: 3px;
-                    overflow-x: auto;
-                }
-                code {
-                    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
-                    font-size: 0.9em;
-                }
-                .eu-flag {
-                    font-size: 1.2em;
-                    margin-right: 5px;
-                }
-                blockquote {
-                    border-left: 4px solid #0066ff;
-                    padding-left: 16px;
-                    margin-left: 0;
-                    color: #555;
-                }
-            </style>
-            <script src="https://cdnjs.cloudflare.com/ajax/libs/markdown-it/12.3.2/markdown-it.min.js"></script>
-            <script>
-                const vscode = acquireVsCodeApi();
-                
-                document.addEventListener('DOMContentLoaded', () => {
-                    const md = window.markdownit({
-                        html: false,
-                        linkify: true,
-                        typographer: true
-                    });
-                    
-                    const content = ${JSON.stringify(result.response || '')};
-                    const markdownElement = document.getElementById('markdown-content');
-                    if (markdownElement) {
-                        markdownElement.innerHTML = md.render(content);
-                    }
-                });
-            </script>
-        </head>
-        <body>
-            <h1><span class="eu-flag">🇪🇺</span>EU AI Act Compliance Analysis</h1>
-            
-            <h2>Compliance Status</h2>
-            <div class="status">${statusEmoji} ${statusText}</div>
-            
-            ${result.article ? `<h2>Article Reference</h2><div>${result.article}</div>` : ''}
-            ${result.violationType ? `<h2>Violation Type</h2><div>${result.violationType}</div>` : ''}
-            
-            <h2>Detailed Analysis</h2>
-            <div class="explanation" id="markdown-content"></div>
-        </body>
-        </html>
-    `;
-}
 
 /**
  * Format the HTML content for the webview panel
@@ -951,36 +746,36 @@ function getWebviewContent(result: AnalysisResponse): string {
 	const statusText = result.status === VulnerabilityStatus.Vulnerable ? 'Vulnerable' : 'Benign';
 	let functionReferences = '';
 	// Define file references with proper paths and lines
-	if (result.cweType === 'CWE-416') {
-		functionReferences = `
-        <h2>Function References</h2>
-        <ul>
-            <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/ots/src/ots.cc', 967); return false;"><strong>font->ParseTable</strong></a></li>
-            <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/ots/src/ots.cc', 587); return false;"><strong>GetTableData</strong></a></li>
-            <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/ots/src/ots.cc', 1162); return false;"><strong>table->Parse</strong></a></li>
-            <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/ots/src/ots.cc', 79); return false;"><strong>arena.Allocate</strong></a></li>
-            <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/ots/src/ots.cc', 1070); return false;"><strong>AddTable</strong></a></li>
-        </ul>
-    `;
-	}
-	else if (result.cweType === 'CWE-200'){
-		functionReferences = `
-        <h2>Function References</h2>
-        <ul>
-            <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/server/middlewares/static.ts', 264); return false;"><strong>ensureServingAccess</strong></a></li>
-            <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/utils.ts', 353); return false;"><strong>rawRE</strong></a></li>
-            <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/utils.ts', 352); return false;"><strong>urlRE</strong></a></li>
-            <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/server/middlewares/static.ts', 223); return false;"><strong>isFileServingAllowed</strong></a></li>
-            <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/utils.ts', 269); return false;"><strong>fsPathFromUrl</strong></a></li>
-			<li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/utils.ts', 262); return false;"><strong>fsPathFromId</strong></a></li>
-			<li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/shared/utils.ts', 31); return false;"><strong>cleanUrl</strong></a></li>
-			<li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/utils.ts', 256); return false;"><strong>VOLUME_RE</strong></a></li>			
-			<li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/shared/utils.ts', 30); return false;"><strong>postfixRE</strong></a></li>
-			<li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/utils.ts', 258); return false;"><strong>normalizePath</strong></a></li>			
-			<li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/server/middlewares/static.ts', 247); return false;"><strong>isFileLoadingAllowed</strong></a></li>
-        </ul>
-    `;
-	}
+	// if (result.cweType === 'CWE-416') {
+	// 	functionReferences = `
+	//     <h2>Function References</h2>
+	//     <ul>
+	//         <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/ots/src/ots.cc', 967); return false;"><strong>font->ParseTable</strong></a></li>
+	//         <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/ots/src/ots.cc', 587); return false;"><strong>GetTableData</strong></a></li>
+	//         <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/ots/src/ots.cc', 1162); return false;"><strong>table->Parse</strong></a></li>
+	//         <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/ots/src/ots.cc', 79); return false;"><strong>arena.Allocate</strong></a></li>
+	//         <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/ots/src/ots.cc', 1070); return false;"><strong>AddTable</strong></a></li>
+	//     </ul>
+	// `;
+	// }
+	// else if (result.cweType === 'CWE-200'){
+	// 	functionReferences = `
+	//     <h2>Function References</h2>
+	//     <ul>
+	//         <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/server/middlewares/static.ts', 264); return false;"><strong>ensureServingAccess</strong></a></li>
+	//         <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/utils.ts', 353); return false;"><strong>rawRE</strong></a></li>
+	//         <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/utils.ts', 352); return false;"><strong>urlRE</strong></a></li>
+	//         <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/server/middlewares/static.ts', 223); return false;"><strong>isFileServingAllowed</strong></a></li>
+	//         <li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/utils.ts', 269); return false;"><strong>fsPathFromUrl</strong></a></li>
+	// 		<li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/utils.ts', 262); return false;"><strong>fsPathFromId</strong></a></li>
+	// 		<li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/shared/utils.ts', 31); return false;"><strong>cleanUrl</strong></a></li>
+	// 		<li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/utils.ts', 256); return false;"><strong>VOLUME_RE</strong></a></li>			
+	// 		<li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/shared/utils.ts', 30); return false;"><strong>postfixRE</strong></a></li>
+	// 		<li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/utils.ts', 258); return false;"><strong>normalizePath</strong></a></li>			
+	// 		<li><a href="javascript:void(0)" onclick="openFile('C:/Users/yuzhounie/OneDrive - purdue.edu/PycharmProjects/plugins/examples/vite/packages/vite/src/node/server/middlewares/static.ts', 247); return false;"><strong>isFileLoadingAllowed</strong></a></li>
+	//     </ul>
+	// `;
+	// }
 
 
 	return `
@@ -1111,278 +906,8 @@ function getWebviewContent(result: AnalysisResponse): string {
     `;
 }
 
-/**
- * Shows EU AI Act compliance suggestions
- */
-function showEUAIActComplianceSuggestions(result: EUAIActAnalysisResponse) {
-	if (!result) {
-		vscode.window.showInformationMessage('No EU AI Act analysis result available.');
-		return;
-	}
 
-	const panel = vscode.window.createWebviewPanel(
-		'euAIActCompliance',
-		'EU AI Act Compliance Suggestions',
-		vscode.ViewColumn.Beside,
-		{
-			enableScripts: true,
-			retainContextWhenHidden: true
-		}
-	);
 
-	const suggestions = generateEUAIActComplianceSuggestions(result);
-	panel.webview.html = getEUAIActComplianceSuggestionsContent(suggestions, result);
-}
-
-/**
- * Generates EU AI Act compliance suggestions
- */
-function generateEUAIActComplianceSuggestions(result: EUAIActAnalysisResponse): {
-	title: string;
-	description: string;
-	suggestions: { title: string; description: string; actions?: string[] }[];
-	hasViolation: boolean;
-} {
-	const hasViolation = result.status === EUAIActViolationStatus.Violation;
-
-	if (hasViolation) {
-		// Specific suggestions based on the article violated
-		if (result.article?.includes('Article 15.4')) {
-			return {
-				title: "Addressing Article 15.4 Violations - Cybersecurity Requirements",
-				description: "Your AI system needs to meet the accuracy, robustness and cybersecurity requirements:",
-				suggestions: [
-					{
-						title: "1. Implement Security Measures",
-						description: "Add appropriate security controls to protect against the identified threats",
-						actions: [
-							"Implement input validation and sanitization",
-							"Add authentication and authorization mechanisms",
-							"Use encryption for sensitive data",
-							"Implement rate limiting and access controls"
-						]
-					},
-					{
-						title: "2. Conduct Security Testing",
-						description: "Perform comprehensive security assessments",
-						actions: [
-							"Run penetration testing",
-							"Perform vulnerability scanning",
-							"Conduct code security reviews",
-							"Test against common attack vectors"
-						]
-					},
-					{
-						title: "3. Document Security Measures",
-						description: "Maintain documentation of security implementations",
-						actions: [
-							"Document all security controls",
-							"Create incident response procedures",
-							"Maintain security update logs",
-							"Document risk assessments"
-						]
-					}
-				],
-				hasViolation: true
-			};
-		} else if (result.article?.includes('Article 10')) {
-			return {
-				title: "Addressing Article 10 Violations - Data Governance",
-				description: "Your AI system must comply with data and data governance requirements:",
-				suggestions: [
-					{
-						title: "1. Implement Privacy Controls",
-						description: "Ensure proper handling of personal data",
-						actions: [
-							"Implement data minimization principles",
-							"Add consent management mechanisms",
-							"Ensure data anonymization where needed",
-							"Implement right to erasure procedures"
-						]
-					},
-					{
-						title: "2. Data Quality Management",
-						description: "Ensure high quality and appropriate data sets",
-						actions: [
-							"Implement data validation procedures",
-							"Document data sources and processing",
-							"Ensure data relevance and representation",
-							"Monitor for bias in data sets"
-						]
-					}
-				],
-				hasViolation: true
-			};
-		}
-
-		// Generic suggestions for violations
-		return {
-			title: "EU AI Act Compliance Requirements",
-			description: "Your AI system needs to address the identified compliance issues:",
-			suggestions: [
-				{
-					title: "1. Review EU AI Act Requirements",
-					description: "Thoroughly understand the specific requirements for your AI system category"
-				},
-				{
-					title: "2. Implement Technical Measures",
-					description: "Add necessary technical controls to ensure compliance"
-				},
-				{
-					title: "3. Create Documentation",
-					description: "Maintain comprehensive documentation of your AI system"
-				},
-				{
-					title: "4. Conduct Compliance Assessment",
-					description: "Perform regular assessments to ensure ongoing compliance"
-				}
-			],
-			hasViolation: true
-		};
-	} else {
-		// Suggestions for compliant systems
-		return {
-			title: "Maintaining EU AI Act Compliance",
-			description: "Your code appears compliant, but consider these best practices:",
-			suggestions: [
-				{
-					title: "1. Regular Compliance Reviews",
-					description: "Schedule periodic reviews to ensure continued compliance as regulations evolve"
-				},
-				{
-					title: "2. Documentation",
-					description: "Maintain clear documentation of AI system design and decision-making processes"
-				},
-				{
-					title: "3. Transparency Measures",
-					description: "Implement transparency features to explain AI decisions when applicable"
-				},
-				{
-					title: "4. Risk Management",
-					description: "Continuously assess and mitigate potential risks in your AI system"
-				}
-			],
-			hasViolation: false
-		};
-	}
-}
-
-/**
- * Format HTML content for EU AI Act compliance suggestions
- */
-function getEUAIActComplianceSuggestionsContent(
-	suggestions: {
-		title: string;
-		description: string;
-		suggestions: { title: string; description: string; actions?: string[] }[];
-		hasViolation: boolean;
-	},
-	result: EUAIActAnalysisResponse
-): string {
-	const statusStyle = suggestions.hasViolation ?
-		'color: #ff6600; background-color: rgba(255, 165, 0, 0.1); padding: 5px;' :
-		'color: #0066ff; background-color: rgba(0, 100, 255, 0.1); padding: 5px;';
-
-	const suggestionsHtml = suggestions.suggestions.map(suggestion => {
-		const actionsHtml = suggestion.actions ?
-			`<ul class="actions">${suggestion.actions.map(action => `<li>${action}</li>`).join('')}</ul>` :
-			'';
-
-		return `
-			<div class="suggestion">
-				<h3>${suggestion.title}</h3>
-				<p>${suggestion.description}</p>
-				${actionsHtml}
-			</div>
-		`;
-	}).join('');
-
-	return `
-		<!DOCTYPE html>
-		<html lang="en">
-		<head>
-			<meta charset="UTF-8">
-			<meta name="viewport" content="width=device-width, initial-scale=1.0">
-			<title>EU AI Act Compliance Suggestions</title>
-			<style>
-				body {
-					font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
-					padding: 20px;
-					line-height: 1.6;
-				}
-				h1 {
-					border-bottom: 1px solid #eaecef;
-					padding-bottom: 10px;
-					margin-bottom: 20px;
-				}
-				h2 {
-					margin-top: 24px;
-					margin-bottom: 16px;
-					font-weight: 600;
-				}
-				h3 {
-					margin-top: 20px;
-					margin-bottom: 10px;
-					font-weight: 600;
-					color: #0066ff;
-				}
-				.status {
-					font-weight: bold;
-					display: inline-block;
-					border-radius: 3px;
-					${statusStyle}
-				}
-				.suggestion {
-					background-color: #f8f9fa;
-					border-left: 4px solid #0066ff;
-					padding: 16px;
-					margin-bottom: 20px;
-					border-radius: 0 3px 3px 0;
-				}
-				.actions {
-					margin-top: 10px;
-					padding-left: 20px;
-				}
-				.actions li {
-					margin-bottom: 5px;
-				}
-				.eu-flag {
-					font-size: 1.2em;
-					margin-right: 5px;
-				}
-				.footer {
-					margin-top: 40px;
-					padding-top: 20px;
-					border-top: 1px solid #eaecef;
-					color: #586069;
-					font-size: 0.9em;
-				}
-			</style>
-		</head>
-		<body>
-			<h1><span class="eu-flag">🇪🇺</span>EU AI Act Compliance Suggestions</h1>
-			
-			<h2>Compliance Status</h2>
-			<div class="status">
-				${suggestions.hasViolation ? '⚠️ Violation Detected' : '✅ Compliant'}
-				${result.article ? ` - ${result.article}` : ''}
-			</div>
-			
-			<h2>${suggestions.title}</h2>
-			<p>${suggestions.description}</p>
-			
-			<div class="suggestions-container">
-				${suggestionsHtml}
-			</div>
-			
-			<div class="footer">
-				<p>These suggestions are based on the EU AI Act requirements. Always consult with legal experts 
-				for comprehensive compliance guidance. The EU AI Act is subject to updates and interpretations.</p>
-			</div>
-		</body>
-		</html>
-	`;
-}
 
 /**
  * Analyzes the entire document or code chunks when a file is saved
@@ -1404,75 +929,75 @@ async function analyzeDocumentOnSave(document: vscode.TextDocument): Promise<voi
 	try {
 		// Get document symbols to find functions/methods
 		const symbols = await getDocumentSymbols(document);
-		
+
 		// Filter to only include function and method symbols
 		// filter declarations
-		const functionSymbols = symbols.filter(symbol => 
-			(symbol.kind === vscode.SymbolKind.Function || 
-			symbol.kind === vscode.SymbolKind.Method ||
-			symbol.kind === vscode.SymbolKind.Constructor ) 
+		const functionSymbols = symbols.filter(symbol =>
+			(symbol.kind === vscode.SymbolKind.Function ||
+				symbol.kind === vscode.SymbolKind.Method ||
+				symbol.kind === vscode.SymbolKind.Constructor)
 			&& !symbol.detail.includes("declaration")
 			&& !symbol.name.startsWith("~")
 		);
-		
+
 		if (functionSymbols.length === 0) {
 			console.log('No functions or methods found in the document');
 			return;
 		}
-		
+
 		console.log(`Found ${functionSymbols.length} functions/methods to analyze`);
-		
+
 		// Initialize the analysis results array for this document if it doesn't exist
 		if (!documentAnalysisResults.has(document.uri.toString())) {
 			documentAnalysisResults.set(document.uri.toString(), []);
 		}
-		
+
 		// Get the current results array
 		const currentResults = documentAnalysisResults.get(document.uri.toString()) || [];
-		
+
 		// Track vulnerable functions count
 		let vulnerableFunctionsCount = 0;
-		
+
 		await vscode.window.withProgress({
 			location: vscode.ProgressLocation.Notification,
 			title: "Analyzing functions",
 			cancellable: true
 		}, async (progress, token) => {
 			// Create an array to store all analysis promises and their associated function symbols
-			const analysisPromises: { 
-				promise: Promise<AnalysisResult>; 
+			const analysisPromises: {
+				promise: Promise<AnalysisResult>;
 				functionSymbol: vscode.DocumentSymbol;
 				code: string;
 				codeHash: string;
 				shouldAnalyze: boolean;
 			}[] = [];
-			
+
 			// Create all analysis promises
 			for (const functionSymbol of functionSymbols) {
 				if (token.isCancellationRequested) {
 					break;
 				}
-				
+
 				// Extract the function's code
 				const functionRange = functionSymbol.range;
 				const functionCode = document.getText(functionRange);
-				
+
 				// Generate a hash of the function code to detect changes
 				const codeHash = generateCodeHash(functionCode);
-				
+
 				// Check if we already have a result for this function with the same hash
-				const existingResult = currentResults.find(r => 
-					r.functionSymbol.name === functionSymbol.name && 
+				const existingResult = currentResults.find(r =>
+					r.functionSymbol.name === functionSymbol.name &&
 					r.codeHash === codeHash
 				);
-				
+
 				// Determine if we need to analyze this function
 				const shouldAnalyze = !existingResult;
-				
+
 				// If we already have a result for this function with the same code hash, reuse it
 				if (existingResult) {
 					console.log(`Reusing previous analysis for function: ${functionSymbol.name}`);
-					
+
 					// If the function is vulnerable, add its decoration
 					if (existingResult.result.status === VulnerabilityStatus.Vulnerable) {
 						vulnerableFunctionsCount++;
@@ -1480,15 +1005,15 @@ async function analyzeDocumentOnSave(document: vscode.TextDocument): Promise<voi
 						editor.setDecorations(decorationType, [functionSymbol.range]);
 					}
 				}
-				
+
 				// Create the promise but don't await it yet
 				analysisPromises.push({
 					// Only create a real promise if we need to analyze
-					promise: shouldAnalyze 
+					promise: shouldAnalyze
 						? analyzeCodeForVulnerabilities(functionCode)
-						: Promise.resolve({ 
+						: Promise.resolve({
 							result: existingResult?.result || { status: VulnerabilityStatus.Benign },
-							status: 'success' 
+							status: 'success'
 						}),
 					functionSymbol,
 					code: functionCode,
@@ -1496,26 +1021,26 @@ async function analyzeDocumentOnSave(document: vscode.TextDocument): Promise<voi
 					shouldAnalyze
 				});
 			}
-			
+
 			// Count how many functions actually need analysis
 			const functionsToAnalyze = analysisPromises.filter(item => item.shouldAnalyze).length;
-			
+
 			// Report initial progress
-			progress.report({ 
+			progress.report({
 				message: `Sending ${functionsToAnalyze} analysis requests (${analysisPromises.length - functionsToAnalyze} cached)...`,
 				increment: 5
 			});
-			
+
 			// Process results as they complete
 			let completedCount = 0;
 			const incrementPerFunction = 95 / analysisPromises.length;
-			
+
 			// Process each promise as it completes
 			await Promise.all(analysisPromises.map(async (item, index) => {
 				try {
 					// We already reported progress for cached functions, so only wait for ones we need to analyze
 					const result = await item.promise;
-					
+
 					// If we've analyzed this function, create a new result object
 					if (item.shouldAnalyze) {
 						// Create the analysis result object with code hash
@@ -1524,23 +1049,23 @@ async function analyzeDocumentOnSave(document: vscode.TextDocument): Promise<voi
 							result: result.result,
 							codeHash: item.codeHash
 						};
-						
+
 						// Update the stored analysis results immediately
 						// Remove any existing result for this function
-						const existingIndex = currentResults.findIndex(r => 
+						const existingIndex = currentResults.findIndex(r =>
 							r.functionSymbol.name === item.functionSymbol.name
 						);
-						
+
 						if (existingIndex >= 0) {
 							currentResults.splice(existingIndex, 1);
 						}
-						
+
 						// Add the new result
 						currentResults.push(analysisResult);
-						
+
 						// Update the map
 						documentAnalysisResults.set(document.uri.toString(), currentResults);
-						
+
 						// If vulnerable, add decoration
 						if (result.result.status === VulnerabilityStatus.Vulnerable) {
 							vulnerableFunctionsCount++;
@@ -1548,25 +1073,25 @@ async function analyzeDocumentOnSave(document: vscode.TextDocument): Promise<voi
 							editor.setDecorations(decorationType, [item.functionSymbol.range]);
 						}
 					}
-					
+
 					// Update progress
 					completedCount++;
-					progress.report({ 
+					progress.report({
 						message: `Analyzed ${completedCount}/${analysisPromises.length} functions (${analysisPromises.length - functionsToAnalyze} from cache)`,
-						increment: incrementPerFunction 
+						increment: incrementPerFunction
 					});
-					
+
 				} catch (error) {
 					console.error(`Error analyzing function ${item.functionSymbol.name}:`, error);
 					completedCount++;
-					progress.report({ 
+					progress.report({
 						message: `Error analyzing ${item.functionSymbol.name}`,
 						increment: incrementPerFunction
 					});
 				}
 			}));
 		});
-		
+
 		// Show final notification about analysis results
 		if (vulnerableFunctionsCount > 0) {
 			// Show notification with count of vulnerable functions
@@ -1589,374 +1114,20 @@ async function analyzeDocumentOnSave(document: vscode.TextDocument): Promise<voi
  * @returns A string hash representation
  */
 function generateCodeHash(code: string): string {
-    // Simple hash function based on code length and character sums
-    let hash = 0;
-    for (let i = 0; i < code.length; i++) {
-        const char = code.charCodeAt(i);
-        hash = ((hash << 5) - hash) + char;
-        hash = hash & hash; // Convert to 32bit integer
-    }
-    return hash.toString(16);
-}
-
-/**
- * Gets all document symbols using the document symbol provider
- * @param document The document to get symbols from
- * @returns Array of document symbols
- */
-async function getDocumentSymbols(document: vscode.TextDocument): Promise<vscode.DocumentSymbol[]> {
-	try {
-		const symbolsResult = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
-			'vscode.executeDocumentSymbolProvider',
-			document.uri
-		);
-
-		if (!symbolsResult) {
-			return [];
-		}
-
-		// Flatten nested symbols to get all symbols
-		const flattenSymbols = (symbols: vscode.DocumentSymbol[]): vscode.DocumentSymbol[] => {
-			return symbols.reduce((acc: vscode.DocumentSymbol[], symbol) => {
-				acc.push(symbol);
-				if (symbol.children && symbol.children.length > 0) {
-					acc.push(...flattenSymbols(symbol.children));
-				}
-				return acc;
-			}, []);
-		};
-
-		return flattenSymbols(symbolsResult);
-	} catch (error) {
-		console.error('Error getting document symbols:', error);
-		return [];
+	// Simple hash function based on code length and character sums
+	let hash = 0;
+	for (let i = 0; i < code.length; i++) {
+		const char = code.charCodeAt(i);
+		hash = ((hash << 5) - hash) + char;
+		hash = hash & hash; // Convert to 32bit integer
 	}
+	return hash.toString(16);
 }
 
-/**
- * Shows improvement suggestions in a webview panel
- * @param result The analysis result to generate suggestions for
- */
-function showImprovementSuggestions(result: AnalysisResponse) {
-	if (!result) {
-		vscode.window.showInformationMessage('No analysis result available for improvement suggestions.');
-		return;
-	}
 
-	// Create a webview panel to display the improvement suggestions
-	const panel = vscode.window.createWebviewPanel(
-		'improvementSuggestions',
-		'Suggestions for Improvement',
-		vscode.ViewColumn.Beside,
-		{
-			enableScripts: true,
-			retainContextWhenHidden: true
-		}
-	);
 
-	// Generate improvement suggestions based on the analysis result
-	const suggestions = generateImprovementSuggestions(result);
 
-	// Set HTML content with the formatted suggestions
-	panel.webview.html = getImprovementSuggestionsContent(suggestions, result);
-}
 
-/**
- * Generates improvement suggestions based on the analysis result
- * @param result The analysis result
- * @returns Object containing suggestions and code examples
- */
-function generateImprovementSuggestions(result: AnalysisResponse): {
-	title: string;
-	description: string;
-	suggestions: { title: string; description: string; code?: string }[];
-	isVulnerable: boolean;
-} {
-	const isVulnerable = result.status === VulnerabilityStatus.Vulnerable;
-
-	if (isVulnerable) {
-		// Suggestions for CWE-416: Use After Free
-		if (result.cweType?.includes('CWE-416')) {
-			return {
-				title: "Fixing Use-After-Free Vulnerability",
-				description: "The main issue is the mismatch between the lifetime of the Arena object and its allocations being used by the Font object. Here are some approaches to fix this vulnerability:",
-				suggestions: [
-					{
-						title: "1. Make the Arena object a member of the Font class",
-						description: "This ensures the Arena has the same lifetime as the Font object that uses its allocations:",
-						code: `// Add Arena as a member variable to Font class
-class Font {
-private:
-    ots::Arena m_arena;  // Add this member variable
-    // ...existing members...
-
-public:
-    // ...existing methods...
-    
-    // Then modify ParseTable to use the member arena instead of a passed one
-    bool ParseTable(/* params */) {
-        // Use m_arena instead of a parameter
-        if (GetTableData(data, table_entry, m_arena, &table_length, &table_data)) {
-            // ...existing code...
-        }
-    }
-};`
-					},
-					{
-						title: "2. Use shared ownership for arena memory",
-						description: "If modifying the Font class isn't feasible, use a shared_ptr to manage the Arena's lifetime:",
-						code: `// In ProcessGeneric
-std::shared_ptr<ots::Arena> arena_ptr = std::make_shared<ots::Arena>();
-
-// Pass the shared_ptr to ParseTable
-if (!font->ParseTable(it->second, data, arena_ptr)) {
-    return OTS_FAILURE_MSG_TAG("Failed to parse table", tag);
-}
-
-// Modify ParseTable and GetTableData to accept shared_ptr<Arena>
-bool Font::ParseTable(/* params */, std::shared_ptr<ots::Arena> arena) {
-    // ...existing code...
-    if (GetTableData(data, table_entry, arena, &table_length, &table_data)) {
-        // ...existing code...
-    }
-}
-
-// Store the shared_ptr in the Font class to keep the Arena alive
-m_arenas.push_back(arena);  // m_arenas would be a member variable: std::vector<std::shared_ptr<ots::Arena>>`
-					},
-					{
-						title: "3. Copy the allocated data instead of storing references",
-						description: "Instead of storing pointers to arena-allocated memory, copy the data:",
-						code: `if (GetTableData(data, table_entry, arena, &table_length, &table_data)) {
-    // Create a copy of the data that the Font owns
-    uint8_t* owned_data = new uint8_t[table_length];
-    memcpy(owned_data, table_data, table_length);
-    
-    // Store the owned copy in the Font's tables
-    m_tables[tag] = table;
-    ret = table->Parse(owned_data, table_length);
-    
-    // Ensure proper cleanup in the Font's destructor
-}`
-					},
-					{
-						title: "4. Restructure the memory ownership model",
-						description: "Redesign the relationship between Font and its data to have clearer ownership semantics:",
-						code: `// Create a FontData class that owns all the font's data
-class FontData {
-private:
-    std::map<uint32_t, std::vector<uint8_t>> table_data;
-    
-public:
-    void AddTable(uint32_t tag, const uint8_t* data, size_t length) {
-        table_data[tag].assign(data, data + length);
-    }
-    
-    const uint8_t* GetTableData(uint32_t tag, size_t* length) {
-        if (table_data.find(tag) != table_data.end()) {
-            *length = table_data[tag].size();
-            return table_data[tag].data();
-        }
-        return nullptr;
-    }
-};
-
-// Font would then own a FontData object
-class Font {
-private:
-    FontData m_data;
-    // ...other members...
-};`
-					}
-				],
-				isVulnerable: true
-			};
-		}
-
-		// Generic vulnerable code suggestions
-		return {
-			title: "Suggestions for Improving Code Security",
-			description: "Based on the analysis, here are some general suggestions to improve your code's security:",
-			suggestions: [
-				{
-					title: "1. Review memory management practices",
-					description: "Ensure proper resource acquisition and release, considering the RAII pattern (Resource Acquisition Is Initialization)."
-				},
-				{
-					title: "2. Use smart pointers when applicable",
-					description: "Replace raw pointers with std::unique_ptr, std::shared_ptr, or std::weak_ptr to help manage object lifetimes."
-				},
-				{
-					title: "3. Implement thorough input validation",
-					description: "Validate all inputs thoroughly before processing them, especially for size fields and pointers."
-				},
-				{
-					title: "4. Add unit tests for edge cases",
-					description: "Create tests specifically targeting potential vulnerability scenarios to ensure they're properly handled."
-				}
-			],
-			isVulnerable: true
-		};
-	} else {
-		// Suggestions for benign code
-		return {
-			title: "Suggestions for Code Improvement",
-			description: "Although no vulnerabilities were detected, here are some suggestions to improve your code quality:",
-			suggestions: [
-				{
-					title: "1. Improve code readability",
-					description: "Add clear comments, use descriptive variable names, and structure your code in a logical way."
-				},
-				{
-					title: "2. Enhance error handling",
-					description: "Implement comprehensive error handling to gracefully manage unexpected situations."
-				},
-				{
-					title: "3. Add thorough input validation",
-					description: "Even if your code is currently secure, add explicit input validation to protect against future changes."
-				},
-				{
-					title: "4. Write unit tests",
-					description: "Create unit tests to verify correctness and prevent regressions."
-				}
-			],
-			isVulnerable: false
-		};
-	}
-}
-
-/**
- * Formats the HTML content for the improvement suggestions webview
- * @param suggestions The generated suggestions
- * @param result The original analysis result
- * @returns HTML content for the webview
- */
-function getImprovementSuggestionsContent(
-	suggestions: {
-		title: string;
-		description: string;
-		suggestions: { title: string; description: string; code?: string }[];
-		isVulnerable: boolean;
-	},
-	result: AnalysisResponse
-): string {
-	const statusStyle = suggestions.isVulnerable ?
-		'color: #d73a49; background-color: rgba(255, 0, 0, 0.1); padding: 5px;' :
-		'color: #22863a; background-color: rgba(0, 255, 0, 0.1); padding: 5px;';
-
-	// Generate HTML for each suggestion
-	const suggestionsHtml = suggestions.suggestions.map(suggestion => {
-		const codeBlock = suggestion.code ?
-			`<pre><code class="language-cpp">${escapeHtml(suggestion.code)}</code></pre>` :
-			'';
-
-		return `
-			<div class="suggestion">
-				<h3>${suggestion.title}</h3>
-				<p>${suggestion.description}</p>
-				${codeBlock}
-			</div>
-		`;
-	}).join('');
-
-	return `
-		<!DOCTYPE html>
-		<html lang="en">
-		<head>
-			<meta charset="UTF-8">
-			<meta name="viewport" content="width=device-width, initial-scale=1.0">
-			<title>Suggestions for Improvement</title>
-			<style>
-				body {
-					font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
-					padding: 20px;
-					line-height: 1.6;
-				}
-				h1 {
-					border-bottom: 1px solid #eaecef;
-					padding-bottom: 10px;
-					margin-bottom: 20px;
-				}
-				h2 {
-					margin-top: 24px;
-					margin-bottom: 16px;
-					font-weight: 600;
-				}
-				h3 {
-					margin-top: 20px;
-					margin-bottom: 10px;
-					font-weight: 600;
-				}
-				.status {
-					font-weight: bold;
-					display: inline-block;
-					border-radius: 3px;
-					${statusStyle}
-				}
-				.suggestion {
-					background-color: #f8f9fa;
-					border-left: 4px solid #0366d6;
-					padding: 16px;
-					margin-bottom: 20px;
-					border-radius: 0 3px 3px 0;
-				}
-				pre {
-					background-color: #f3f3f3;
-					padding: 16px;
-					border-radius: 3px;
-					overflow-x: auto;
-				}
-				code {
-					font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
-					font-size: 0.9em;
-				}
-				.footer {
-					margin-top: 40px;
-					padding-top: 20px;
-					border-top: 1px solid #eaecef;
-					color: #586069;
-					font-size: 0.9em;
-				}
-			</style>
-		</head>
-		<body>
-			<h1>Suggestions for Improvement</h1>
-			
-			<h2>Code Status</h2>
-			<div class="status">
-				${suggestions.isVulnerable ? '⚠️ Vulnerable' : '✅ Benign'}
-				${result.cweType ? ` - ${result.cweType}` : ''}
-			</div>
-			
-			<h2>${suggestions.title}</h2>
-			<p>${suggestions.description}</p>
-			
-			<div class="suggestions-container">
-				${suggestionsHtml}
-			</div>
-			
-			<div class="footer">
-				<p>These suggestions are generated by an AI assistant based on static code analysis. 
-				Always review and test changes thoroughly before implementing them in production code.</p>
-			</div>
-		</body>
-		</html>
-	`;
-}
-
-/**
- * Helper function to escape HTML special characters
- * @param text The text to escape
- * @returns Escaped text safe for HTML insertion
- */
-function escapeHtml(text: string): string {
-	return text
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;")
-		.replace(/"/g, "&quot;")
-		.replace(/'/g, "&#039;");
-}
 
 // This method is called when your extension is deactivated
 export function deactivate() {
@@ -1983,7 +1154,9 @@ async function extractDependencies(code: string, round: number): Promise<Extract
 			path: urlObj.pathname,
 			method: 'POST',
 			headers: {
-				'Content-Type': 'application/json'
+				'Content-Type': 'application/json',
+				'Authorization': `Bearer ${apiKey}`,
+				'X-API-Key': apiKey
 			}
 		};
 
@@ -2007,7 +1180,7 @@ async function extractDependencies(code: string, round: number): Promise<Extract
 					if (response.status !== 'success') {
 						// Fallback to default dependencies if the API doesn't return the expected format
 						console.warn('API did not return expected format, using fallback dependencies');
-						result.dependencies = getFallbackDependencies(round);
+						result.dependencies = [];
 					}
 					resolve(result);
 				} catch (e) {
@@ -2034,112 +1207,90 @@ async function extractDependencies(code: string, round: number): Promise<Extract
 }
 
 /**
- * Get fallback dependencies for a specific round if the API fails
- * @param round The extraction round
- * @returns Array of fallback dependencies
- */
-function getFallbackDependencies(round: number): string[] {
-	switch (round) {
-		case 1:
-			return ["font->ParseTable", "font->GetTable"];
-		case 2:
-			return ["GetTableData", "table->Parse", "AddTable"];
-		case 3:
-			return ["arena.Allocate"];
-		case 4:
-			return ["ParseTableData", "ValidateTable"];
-		case 5:
-			return ["CleanupMemory"];
-		default:
-			return [`Round ${round}: Unknown dependencies`];
-	}
-}
-
-/**
  * CodeLens provider for showing vulnerability scan results
  */
 class VulnerabilityScanCodeLensProvider implements vscode.CodeLensProvider {
-    private _onDidChangeCodeLenses: vscode.EventEmitter<void> = new vscode.EventEmitter<void>();
-    public readonly onDidChangeCodeLenses: vscode.Event<void> = this._onDidChangeCodeLenses.event;
+	private _onDidChangeCodeLenses: vscode.EventEmitter<void> = new vscode.EventEmitter<void>();
+	public readonly onDidChangeCodeLenses: vscode.Event<void> = this._onDidChangeCodeLenses.event;
 
-    constructor() {
-        // Refresh CodeLenses when analysis results change
-        const refreshCodeLenses = () => {
-            this._onDidChangeCodeLenses.fire();
-        };
-        
-        // Trigger refresh when configuration changes
-        vscode.workspace.onDidChangeConfiguration(e => {
-            if (e.affectsConfiguration('vulscan')) {
-                refreshCodeLenses();
-            }
-        });
-    }
+	constructor() {
+		// Refresh CodeLenses when analysis results change
+		const refreshCodeLenses = () => {
+			this._onDidChangeCodeLenses.fire();
+		};
 
-    public provideCodeLenses(document: vscode.TextDocument): vscode.ProviderResult<vscode.CodeLens[]> {
-        // Get analysis results for this document
-        const documentUri = document.uri.toString();
-        const analysisResults = documentAnalysisResults.get(documentUri) || [];
-        const euAIActResults = documentEUAIActResults.get(documentUri) || [];
-        
-        if (analysisResults.length === 0 && euAIActResults.length === 0) {
-            return [];
-        }
-        
-        const codeLenses: vscode.CodeLens[] = [];
-        
-        // Create a CodeLens for each analyzed function (vulnerability analysis)
-        for (const analysisResult of analysisResults) {
-            const { functionSymbol, result } = analysisResult;
-            
-            // Create a range for the first line of the function
-            const range = new vscode.Range(
-                functionSymbol.range.start,
-                functionSymbol.range.start.translate(0, functionSymbol.name.length + 2)
-            );
-            
-            // Create CodeLens with appropriate title based on vulnerability status
-            const title = result.status === VulnerabilityStatus.Vulnerable 
-                ? `⚠️ Vulnerable: ${result.cweType || 'Unknown vulnerability'}`
-                : '✅ Benign';
-            
-            // Command to show detailed explanation when clicked
-            const command: vscode.Command = {
-                title,
-                command: 'vulscan.showFunctionDetails',
-                arguments: [document.uri.toString(), functionSymbol.range.start.line, result]
-            };
-            
-            codeLenses.push(new vscode.CodeLens(range, command));
-        }
+		// Trigger refresh when configuration changes
+		vscode.workspace.onDidChangeConfiguration(e => {
+			if (e.affectsConfiguration('vulscan')) {
+				refreshCodeLenses();
+			}
+		});
+	}
 
-        // Create CodeLens for EU AI Act results
-        for (const euAIActResult of euAIActResults) {
-            const { functionSymbol, result } = euAIActResult;
-            
-            // Create a range for the function (slightly offset from vulnerability lens)
-            const range = new vscode.Range(
-                functionSymbol.range.start.translate(1, 0),
-                functionSymbol.range.start.translate(1, functionSymbol.name.length + 2)
-            );
-            
-            // Create CodeLens with EU AI Act status
-            const title = result.status === EUAIActViolationStatus.Violation 
-                ? `🇪🇺 EU AI Act Violation: ${result.article || 'Unknown violation'}`
-                : '🇪🇺 EU AI Act Compliant';
-            
-            // Command to show EU AI Act details when clicked
-            const command: vscode.Command = {
-                title,
-                command: 'vulscan.showEUAIActFunctionDetails',
-                arguments: [document.uri.toString(), functionSymbol.range.start.line, result]
-            };
-            
-            codeLenses.push(new vscode.CodeLens(range, command));
-        }
-        
-        return codeLenses;
-    }
+	public provideCodeLenses(document: vscode.TextDocument): vscode.ProviderResult<vscode.CodeLens[]> {
+		// Get analysis results for this document
+		const documentUri = document.uri.toString();
+		const analysisResults = documentAnalysisResults.get(documentUri) || [];
+		const euAIActResults = documentEUAIActResults.get(documentUri) || [];
+
+		if (analysisResults.length === 0 && euAIActResults.length === 0) {
+			return [];
+		}
+
+		const codeLenses: vscode.CodeLens[] = [];
+
+		// Create a CodeLens for each analyzed function (vulnerability analysis)
+		for (const analysisResult of analysisResults) {
+			const { functionSymbol, result } = analysisResult;
+
+			// Create a range for the first line of the function
+			const range = new vscode.Range(
+				functionSymbol.range.start,
+				functionSymbol.range.start.translate(0, functionSymbol.name.length + 2)
+			);
+
+			// Create CodeLens with appropriate title based on vulnerability status
+			const title = result.status === VulnerabilityStatus.Vulnerable
+				? `⚠️ Vulnerable: ${result.cweType || 'Unknown vulnerability'}`
+				: '✅ Benign';
+
+			// Command to show detailed explanation when clicked
+			const command: vscode.Command = {
+				title,
+				command: 'vulscan.showFunctionDetails',
+				arguments: [document.uri.toString(), functionSymbol.range.start.line, result]
+			};
+
+			codeLenses.push(new vscode.CodeLens(range, command));
+		}
+
+		// Create CodeLens for EU AI Act results
+		for (const euAIActResult of euAIActResults) {
+			const { functionSymbol, result } = euAIActResult;
+
+			// Create a range for the function (slightly offset from vulnerability lens)
+			const range = new vscode.Range(
+				functionSymbol.range.start.translate(1, 0),
+				functionSymbol.range.start.translate(1, functionSymbol.name.length + 2)
+			);
+
+			// Create CodeLens with EU AI Act status
+			const title = result.status === EUAIActViolationStatus.Violation
+				? `🇪🇺 EU AI Act Violation: ${result.article || 'Unknown violation'}`
+				: '🇪🇺 EU AI Act Compliant';
+
+			// Command to show EU AI Act details when clicked
+			const command: vscode.Command = {
+				title,
+				command: 'vulscan.showEUAIActFunctionDetails',
+				arguments: [document.uri.toString(), functionSymbol.range.start.line, result]
+			};
+
+			codeLenses.push(new vscode.CodeLens(range, command));
+		}
+
+		return codeLenses;
+	}
 }
 
 /**
@@ -2149,23 +1300,10 @@ class VulnerabilityScanCodeLensProvider implements vscode.CodeLensProvider {
  * @param result The analysis result
  */
 async function showFunctionDetails(documentUri: string, line: number, result: AnalysisResponse): Promise<void> {
-    // Set the last analysis result for the detailed explanation
-    lastAnalysisResult = result;
-    
-    // Show the detailed explanation
-    showDetailedExplanation();
+	// Set the last analysis result for the detailed explanation
+	lastAnalysisResult = result;
+
+	// Show the detailed explanation
+	showDetailedExplanation();
 }
 
-/**
- * Shows EU AI Act details for a specific function
- * @param documentUri The URI of the document
- * @param line The line number of the function
- * @param result The EU AI Act analysis result
- */
-async function showEUAIActFunctionDetails(documentUri: string, line: number, result: EUAIActAnalysisResponse): Promise<void> {
-    // Set the last EU AI Act result for the detailed explanation
-    lastEUAIActResult = result;
-    
-    // Show the EU AI Act detailed explanation
-    showEUAIActDetailedExplanation();
-}
