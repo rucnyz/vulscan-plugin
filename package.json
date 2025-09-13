@@ -3,7 +3,7 @@
     "name": "virtueguard-code",
     "displayName": "VirtueGuard-Code",
     "description": "A VSCode extension that scans code for vulnerabilities",
-    "version": "0.0.9",
+    "version": "0.1.1",
     "publisher": "virtueai",
     "repository": {
         "type": "git",
@@ -44,6 +44,10 @@
             {
                 "command": "vulscan.selectModel",
                 "title": "VulScan: Select Analysis Model"
+            },
+            {
+                "command": "vulscan.checkTokenUsage",
+                "title": "VulScan: Check Token Usage"
             }
         ],
         "menus": {
@@ -65,12 +69,14 @@
                 "vulscan.apiBaseUrl": {
                     "type": "string",
                     "default": "https://api.virtueai.io/api/vulscan",
-                    "description": "Base URL for the vulnerability analysis API endpoints."
+                    "description": "Base URL for the vulnerability analysis API endpoints.",
+                    "order": 1
                 },
                 "vulscan.autoAnalyzeOnSave": {
                     "type": "boolean",
                     "default": false,
-                    "description": "Automatically analyze the file when saved."
+                    "description": "Automatically analyze the file when saved.",
+                    "order": 20
                 },
                 "vulscan.selectedModel": {
                     "type": "string",
@@ -85,13 +91,15 @@
                         "Claude 4 Sonnet: Advanced AI model for comprehensive code analysis",
                         "GPT-4.1: Advanced AI model for comprehensive code analysis"
                     ],
-                    "description": "Select the AI model to use for vulnerability analysis."
+                    "description": "Select the AI model to use for vulnerability analysis.",
+                    "order": 5
                 },
                 "vulscan.apiKey": {
                     "type": "string",
                     "default": "",
-                    "description": "API key for authentication with the vulnerability analysis service. Get your API key by booking a demo: https://meetings.hubspot.com/shekhar-bapat",
-                    "markdownDescription": "API key for authentication with the vulnerability analysis service. Get your API key by [booking a demo](https://meetings.hubspot.com/shekhar-bapat)."
+                    "description": "Your VirtueAI API key for vulnerability scanning.",
+                    "order": 10,
+                    "markdownDescription": "Your VirtueAI API key for vulnerability scanning. [Check Usage](command:vulscan.checkTokenUsage)"
                 }
             }
         }

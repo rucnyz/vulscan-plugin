@@ -388,22 +388,6 @@ result = add_numbers(5, 3)
 			assert.ok(typeof defaultValues.autoAnalyzeOnSave === 'boolean', 'Auto-analyze should be boolean');
 		});
 
-		test('Should validate API key format', () => {
-			const validKeys = ["test-key-12345"];
-			const invalidKeys = ["invalid-key", "", "test-api-key-123", "dev-key", "key-12345", "dev-key-abc"];
-
-			// Test valid API key patterns
-			validKeys.forEach(key => {
-				const isValid = /^(dev|prod|test)-key-\d{5}$/.test(key);
-				assert.ok(isValid, `${key} should be valid`);
-			});
-
-			// Test invalid API key patterns
-			invalidKeys.forEach(key => {
-				const isValid = /^(dev|prod|test)-key-\d{5}$/.test(key);
-				assert.ok(!isValid, `${key} should be invalid`);
-			});
-		});
 
 		test('Should handle configuration changes', () => {
 			// Mock configuration change event

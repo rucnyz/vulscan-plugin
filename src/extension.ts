@@ -22,7 +22,6 @@ interface AnalysisResponse {
 	cweType?: string;
 	model?: string;
 	response?: string;
-	usage?: any;
 }
 
 interface ExtractResponse {
@@ -40,6 +39,13 @@ interface ExtractResult {
 	status: 'success' | 'error';
 }
 
+interface TokenUsageResponse {
+	tokens_used: number;
+	token_limit: number;
+	usage_percentage: number;
+	is_near_limit: boolean;
+}
+
 // Track active decorations
 let activeDecorations: vscode.TextEditorDecorationType[] = [];
 
@@ -52,25 +58,24 @@ let apiBaseUrl: string = "https://api.virtueai.io/api/vulscan";
 // Store the selected model
 let selectedModel: string = "virtueguard-code";
 
-// Store the API key
-let apiKey: string = "";
+// Get current API key
+function getCurrentApiKey(): string {
+	return apiKey;
+}
 
 // Export for testing
 export function setApiKeyForTesting(key: string) {
 	apiKey = key;
+	// Save to config to maintain consistency
+	saveApiKeyToConfig();
 }
 
-// Rate limit information
-interface RateLimitInfo {
-	limit: number;
-	remaining: number;
-	reset: number;
-}
+// Store single API key
+let apiKey: string = "";
 
-let currentRateLimit: RateLimitInfo | null = null;
 
-// Status bar item for rate limit info
-let rateLimitStatusBarItem: vscode.StatusBarItem;
+
+
 
 // Store analysis results by function/method
 interface FunctionAnalysisResult {
@@ -89,7 +94,8 @@ export function activate(context: vscode.ExtensionContext) {
 	const config = vscode.workspace.getConfiguration('vulscan');
 	apiBaseUrl = config.get('apiBaseUrl') as string || apiBaseUrl;
 	selectedModel = config.get('selectedModel') as string || 'virtueguard-code';
-	apiKey = config.get('apiKey') as string || '';
+	apiKey = config.get('apiKey') as string || "";
+
 	console.log(`Using API base URL: ${apiBaseUrl}`);
 	console.log(`Using model: ${selectedModel}`);
 	console.log(`API key configured: ${apiKey ? 'Yes' : 'No'}`);
@@ -98,11 +104,6 @@ export function activate(context: vscode.ExtensionContext) {
 	// This line of code will only be executed once when your extension is activated
 	console.log('Congratulations, your extension "vulscan" is now active!');
 
-	// Create status bar item for rate limit info
-	rateLimitStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-	rateLimitStatusBarItem.command = 'vulscan.showRateLimitInfo';
-	context.subscriptions.push(rateLimitStatusBarItem);
-	updateRateLimitStatusBar();
 
 	// Register document save event listener for automatic analysis
 	// Moving this up to initialize it before other commands
@@ -115,8 +116,8 @@ export function activate(context: vscode.ExtensionContext) {
 
 		if (autoAnalyzeOnSave) {
 			// Check if API key is configured
-			if (!apiKey) {
-				vscode.window.showWarningMessage('Auto-analysis disabled: API key is required. Please configure it in settings (vulscan.apiKey).');
+			if (!getCurrentApiKey()) {
+				vscode.window.showWarningMessage('Auto-analysis disabled: API key is required. Please add an API key using the command palette.');
 				return;
 			}
 			await analyzeDocumentOnSave(document);
@@ -126,8 +127,8 @@ export function activate(context: vscode.ExtensionContext) {
 	// Register a command to analyze selected code for vulnerabilities
 	const analyzeCodeCommand = vscode.commands.registerCommand('vulscan.analyzeCode', async () => {
 		// Check if API key is configured
-		if (!apiKey) {
-			vscode.window.showErrorMessage('API key is required. Please configure it in VS Code settings (vulscan.apiKey).');
+		if (!getCurrentApiKey()) {
+			vscode.window.showErrorMessage('API key is required. Please add an API key using the command palette.');
 			return;
 		}
 
@@ -330,8 +331,8 @@ ${selectedText}
 	// Register a command to analyze selected code for EU AI Act compliance
 	const analyzeEUAIActCommand = vscode.commands.registerCommand('vulscan.analyzeEUAIAct', async () => {
 		// Check if API key is configured
-		if (!apiKey) {
-			vscode.window.showErrorMessage('API key is required. Please configure it in VS Code settings (vulscan.apiKey).');
+		if (!getCurrentApiKey()) {
+			vscode.window.showErrorMessage('API key is required. Please add an API key using the command palette.');
 			return;
 		}
 
@@ -404,7 +405,7 @@ ${implementationsText}
 ${selectedText}
 `;
 
-				const result = await analyzeCodeForEUAIAct(codeToAnalyze, apiBaseUrl, selectedModel, apiKey);
+				const result = await analyzeCodeForEUAIAct(codeToAnalyze, apiBaseUrl, selectedModel, getCurrentApiKey());
 				const pred = result.result;
 
 				const decorationType = getEUAIActDecorationForResult(pred, activeDecorations);
@@ -485,25 +486,42 @@ ${selectedText}
 		}
 	});
 
-	// Register command to show rate limit info
-	const showRateLimitInfoCommand = vscode.commands.registerCommand('vulscan.showRateLimitInfo', () => {
-		if (currentRateLimit) {
-			const resetTime = new Date(currentRateLimit.reset * 1000).toLocaleString();
-			const percentage = Math.floor((currentRateLimit.remaining / currentRateLimit.limit) * 100);
-			
-			vscode.window.showInformationMessage(
-				`API Rate Limit Status:\n` +
-				`• Remaining: ${currentRateLimit.remaining} out of ${currentRateLimit.limit} requests (${percentage}%)\n` +
-				`• Resets at: ${resetTime}`,
-				{ modal: false }
-			);
-		} else {
-			vscode.window.showInformationMessage(
-				'API rate limit status is unknown. Make an API request to see current status.',
-				{ modal: false }
-			);
+
+	// Register command to open API key settings
+	const openApiKeySettingsCommand = vscode.commands.registerCommand('vulscan.openApiKeySettings', () => {
+		vscode.commands.executeCommand('workbench.action.openSettings', 'vulscan.apiKey');
+	});
+
+	// Register command to check token usage
+	const checkTokenUsageCommand = vscode.commands.registerCommand('vulscan.checkTokenUsage', async () => {
+		// Check if API key is configured
+		if (!getCurrentApiKey()) {
+			vscode.window.showErrorMessage('API key is required to check token usage.');
+			return;
+		}
+
+		try {
+			await vscode.window.withProgress({
+				location: vscode.ProgressLocation.Notification,
+				title: "Checking token usage",
+				cancellable: false
+			}, async (progress) => {
+				const tokenUsage = await checkTokenUsageInternal();
+
+				// Display the token usage information
+				const message = `Token usage: ${tokenUsage.tokens_used}/${tokenUsage.token_limit} (${tokenUsage.usage_percentage}%)`;
+
+				if (tokenUsage.is_near_limit) {
+					vscode.window.showWarningMessage(`${message}\n⚠️ Approaching token limit!`);
+				} else {
+					vscode.window.showInformationMessage(message);
+				}
+			});
+		} catch (error) {
+			vscode.window.showErrorMessage(`Failed to check token usage: ${error}`);
 		}
 	});
+
 
 	// Listen for configuration changes
 	const configListener = vscode.workspace.onDidChangeConfiguration((e) => {
@@ -536,11 +554,9 @@ ${selectedText}
 		// Update API key when configuration changes
 		if (e.affectsConfiguration('vulscan.apiKey')) {
 			const config = vscode.workspace.getConfiguration('vulscan');
-			const newApiKey = config.get('apiKey') as string || '';
-			if (newApiKey !== apiKey) {
-				apiKey = newApiKey;
-				console.log(`Configuration changed: API key updated: ${apiKey ? 'Yes' : 'No'}`);
-			}
+			apiKey = config.get('apiKey') as string || "";
+
+			console.log(`Configuration changed: API key configured: ${apiKey ? 'Yes' : 'No'}`);
 		}
 	});
 
@@ -554,7 +570,8 @@ ${selectedText}
 		showEUAIActDetailsCommand,
 		toggleAutoAnalyzeCommand,
 		selectModelCommand,
-		showRateLimitInfoCommand,
+		openApiKeySettingsCommand,
+		checkTokenUsageCommand,
 		configListener
 	);
 
@@ -631,130 +648,74 @@ function clearAllDecorations() {
 }
 
 /**
- * Parse rate limit headers from the API response
- * @param headers HTTP response headers
- * @returns Parsed rate limit information or null
+ * Refresh decorations for a specific editor based on stored analysis results
+ * @param editor The text editor to refresh decorations for
  */
-function parseRateLimitHeaders(headers: any): RateLimitInfo | null {
-	const limit = headers['x-ratelimit-limit'];
-	const remaining = headers['x-ratelimit-remaining'];
-	const reset = headers['x-ratelimit-reset'];
+function refreshDecorations(editor: vscode.TextEditor) {
+	const documentUri = editor.document.uri.toString();
+	const analysisResults = documentAnalysisResults.get(documentUri) || [];
+	const euAIActResults = documentEUAIActResults.get(documentUri) || [];
 
-	if (limit !== undefined && remaining !== undefined && reset !== undefined) {
-		return {
-			limit: parseInt(limit),
-			remaining: parseInt(remaining),
-			reset: parseInt(reset)
-		};
-	}
+	// Clear existing decorations for this editor first
+	const editorDecorations = activeDecorations.slice();
+	editorDecorations.forEach(decoration => {
+		editor.setDecorations(decoration, []);
+	});
 
-	return null;
-}
+	// Reapply vulnerability decorations based on stored results
+	for (const analysisResult of analysisResults) {
+		const { functionSymbol, result } = analysisResult;
 
-/**
- * Check if we should show rate limit warning
- * @returns true if should show warning
- */
-function shouldShowRateLimitWarning(): boolean {
-	if (!currentRateLimit) {
-		return false;
-	}
-	
-	// Show warning when remaining requests are low (less than 10% of limit)
-	const warningThreshold = Math.max(1, Math.floor(currentRateLimit.limit * 0.1));
-	return currentRateLimit.remaining <= warningThreshold;
-}
-
-/**
- * Update the rate limit status bar item
- */
-function updateRateLimitStatusBar() {
-	if (!rateLimitStatusBarItem) {
-		return;
-	}
-
-	if (currentRateLimit) {
-		const { remaining, limit } = currentRateLimit;
-		const percentage = Math.floor((remaining / limit) * 100);
-		
-		// Choose icon and color based on remaining percentage
-		let icon = '$(pass)'; // Green checkmark
-		let color = undefined; // Default color
-		
-		if (percentage <= 10) {
-			icon = '$(error)'; // Red error icon
-			color = new vscode.ThemeColor('statusBarItem.errorForeground');
-		} else if (percentage <= 25) {
-			icon = '$(warning)'; // Yellow warning icon
-			color = new vscode.ThemeColor('statusBarItem.warningForeground');
+		// Only add decoration for vulnerable functions
+		if (result.status === VulnerabilityStatus.Vulnerable) {
+			const decorationType = getDecorationForResult(result);
+			editor.setDecorations(decorationType, [functionSymbol.range]);
 		}
-		
-		rateLimitStatusBarItem.text = `${icon} API: ${remaining}/${limit}`;
-		rateLimitStatusBarItem.color = color;
-		rateLimitStatusBarItem.tooltip = `API Rate Limit: ${remaining} requests remaining out of ${limit}. Resets at ${new Date(currentRateLimit.reset * 1000).toLocaleTimeString()}`;
-		rateLimitStatusBarItem.show();
-	} else {
-		rateLimitStatusBarItem.text = '$(question) API: Unknown';
-		rateLimitStatusBarItem.color = undefined;
-		rateLimitStatusBarItem.tooltip = 'API rate limit status unknown. Make an API call to see current status.';
-		rateLimitStatusBarItem.show();
+	}
+
+	// Reapply EU AI Act decorations based on stored results
+	for (const euAIActResult of euAIActResults) {
+		const { functionSymbol, result } = euAIActResult;
+
+		// Add decoration for EU AI Act violations
+		if (result.status === EUAIActViolationStatus.Violation) {
+			const decorationType = getEUAIActDecorationForResult(result, activeDecorations);
+			editor.setDecorations(decorationType, [functionSymbol.range]);
+		}
 	}
 }
 
 /**
- * Sleep for specified number of milliseconds
- * @param ms Milliseconds to sleep
+ * Save API key to VS Code configuration
  */
-function sleep(ms: number): Promise<void> {
-	return new Promise(resolve => setTimeout(resolve, ms));
+async function saveApiKeyToConfig(): Promise<void> {
+	const config = vscode.workspace.getConfiguration('vulscan');
+	await config.update('apiKey', apiKey, vscode.ConfigurationTarget.Global);
 }
 
+
+
+
+
+
 /**
- * Make API request with retry logic for rate limits
+ * Make API request with basic error handling
  * @param makeRequest Function to make the API request
- * @param maxRetries Maximum number of retries
  * @returns Promise with the API result
  */
 async function makeRequestWithRetry<T>(
-	makeRequest: () => Promise<T>, 
-	maxRetries: number = 2
+	makeRequest: () => Promise<T>
 ): Promise<T> {
-	let lastError: Error | undefined;
-	
-	for (let attempt = 0; attempt <= maxRetries; attempt++) {
-		try {
-			return await makeRequest();
-		} catch (error: any) {
-			lastError = error;
-			
-			// Check if it's a rate limit error
-			if (error.message.includes('Rate limit exceeded') && attempt < maxRetries) {
-				// Extract retry delay from error message or use default
-				const retryMatch = error.message.match(/Try again in (\d+) seconds/);
-				const retryDelay = retryMatch ? parseInt(retryMatch[1]) * 1000 : 60000; // Default 60 seconds
-				
-				console.log(`Rate limit hit, retrying in ${retryDelay}ms (attempt ${attempt + 1}/${maxRetries + 1})`);
-				
-				// Show notification about retry
-				vscode.window.showInformationMessage(
-					`Rate limit hit. Retrying in ${retryDelay / 1000} seconds... (attempt ${attempt + 1}/${maxRetries + 1})`
-				);
-				
-				await sleep(retryDelay);
-				continue;
-			}
-			
-			// If it's not a rate limit error or we've exhausted retries, throw the error
-			throw error;
-		}
+	try {
+		return await makeRequest();
+	} catch (error: any) {
+		// Token limit errors should be thrown immediately for user attention
+		throw error;
 	}
-	
-	throw new Error(lastError?.message || 'Unknown error occurred');
-
 }
 
 /**
- * Internal function to make vulnerability analysis request (without retry)
+ * Internal function to make vulnerability analysis request
  * @param code The code to analyze
  * @returns Analysis result
  */
@@ -776,40 +737,56 @@ async function analyzeCodeForVulnerabilitiesInternal(code: string): Promise<Anal
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
-				'Authorization': `Bearer ${apiKey}`,
-				'X-API-Key': apiKey
+				'Authorization': `Bearer ${getCurrentApiKey()}`,
+				'X-API-Key': getCurrentApiKey()
 			}
 		};
 
 		const req = http.request(options, (res: any) => {
 			let data = '';
 
-			// Parse rate limit headers
-			const rateLimitHeaders = parseRateLimitHeaders(res.headers);
-			if (rateLimitHeaders) {
-				currentRateLimit = rateLimitHeaders;
-				console.log('Rate limit info:', currentRateLimit);
-				updateRateLimitStatusBar();
-			}
-
-			// Handle 429 Too Many Requests
-			if (res.statusCode === 429) {
-				const retryAfter = res.headers['retry-after'];
-				const rateLimitInfo = parseRateLimitHeaders(res.headers);
-				
-				// Show rate limit error with retry information
-				const retryMessage = retryAfter 
-					? `Rate limit exceeded. Try again in ${retryAfter} seconds.`
-					: 'Rate limit exceeded. Please try again later.';
-				
-				vscode.window.showWarningMessage(retryMessage);
-				
-				return reject(new Error(`Rate limit exceeded. ${retryMessage}`));
+			// Handle 403 Forbidden (likely token limit exceeded)
+			if (res.statusCode === 403) {
+				// Try to get error details from response body
+				let errorData = '';
+				res.on('data', (chunk: any) => {
+					errorData += chunk;
+				});
+				res.on('end', () => {
+					try {
+						const errorResponse = JSON.parse(errorData);
+						const errorMessage = errorResponse.detail || 'Token limit exceeded. Please check your API key quota.';
+						vscode.window.showErrorMessage(errorMessage);
+						return reject(new Error(errorMessage));
+					} catch (e) {
+						const errorMessage = 'Token limit exceeded. Please check your API key quota.';
+						vscode.window.showErrorMessage(errorMessage);
+						return reject(new Error(errorMessage));
+					}
+				});
+				return; // Don't continue processing
 			}
 
 			// Handle other HTTP status errors
 			if (res.statusCode < 200 || res.statusCode >= 300) {
-				return reject(new Error(`API responded with status code ${res.statusCode}`));
+				// Try to get error details from response body
+				let errorData = '';
+				res.on('data', (chunk: any) => {
+					errorData += chunk;
+				});
+				res.on('end', () => {
+					try {
+						const errorResponse = JSON.parse(errorData);
+						const errorMessage = errorResponse.detail || `API responded with status code ${res.statusCode}`;
+						vscode.window.showErrorMessage(errorMessage);
+						return reject(new Error(errorMessage));
+					} catch (e) {
+						const errorMessage = `API responded with status code ${res.statusCode}`;
+						vscode.window.showErrorMessage(errorMessage);
+						return reject(new Error(errorMessage));
+					}
+				});
+				return; // Don't continue processing
 			}
 
 			res.on('data', (chunk: any) => {
@@ -819,14 +796,6 @@ async function analyzeCodeForVulnerabilitiesInternal(code: string): Promise<Anal
 			res.on('end', () => {
 				try {
 					const response = JSON.parse(data);
-					
-					// Show rate limit warning if approaching limit
-					if (shouldShowRateLimitWarning() && currentRateLimit) {
-						vscode.window.showWarningMessage(
-							`API Rate Limit Warning: Only ${currentRateLimit.remaining} requests remaining out of ${currentRateLimit.limit}. Resets at ${new Date(currentRateLimit.reset * 1000).toLocaleTimeString()}.`
-						);
-					}
-					
 					resolve(response);
 				} catch (e) {
 					reject(new Error(`Failed to parse API response: ${e}`));
@@ -846,7 +815,7 @@ async function analyzeCodeForVulnerabilitiesInternal(code: string): Promise<Anal
 }
 
 /**
- * Send the code to an API for vulnerability analysis (with retry logic)
+ * Send the code to an API for vulnerability analysis
  * @param code The code to analyze
  * @returns Analysis result
  */
@@ -1298,6 +1267,11 @@ async function analyzeDocumentOnSave(document: vscode.TextDocument): Promise<voi
 			}));
 		});
 
+		// Refresh decorations after progress completes to ensure they are visible
+		setTimeout(() => {
+			refreshDecorations(editor);
+		}, 100);
+
 		// Show final notification about analysis results
 		if (vulnerableFunctionsCount > 0) {
 			// Show notification with count of vulnerable functions
@@ -1341,7 +1315,7 @@ export function deactivate() {
 }
 
 /**
- * Internal function to extract dependencies from code (without retry)
+ * Internal function to extract dependencies from code
  * @param code The code to analyze
  * @param round The round number (starting from 1)
  * @returns Object containing dependencies array and done flag
@@ -1351,41 +1325,68 @@ async function extractDependenciesInternal(code: string, round: number): Promise
 	const apiUrl = `${apiBaseUrl}/extract`;
 
 	return new Promise((resolve, reject) => {
-		const http = require('http');
+		// Parse URL to determine if http or https should be used
+		const isHttps = apiUrl.startsWith('https');
+		const http = isHttps ? require('https') : require('http');
 		const urlObj = new URL(apiUrl);
 
 		const options = {
 			hostname: urlObj.hostname,
-			port: urlObj.port || 80,
+			port: urlObj.port || (isHttps ? 443 : 80),
 			path: urlObj.pathname,
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
-				'Authorization': `Bearer ${apiKey}`,
-				'X-API-Key': apiKey
+				'Authorization': `Bearer ${getCurrentApiKey()}`,
+				'X-API-Key': getCurrentApiKey()
 			}
 		};
 
 		const req = http.request(options, (res: any) => {
 			let data = '';
 
-			// Handle 429 Too Many Requests
-			if (res.statusCode === 429) {
-				const retryAfter = res.headers['retry-after'];
-				
-				// Show rate limit error with retry information
-				const retryMessage = retryAfter 
-					? `Rate limit exceeded. Try again in ${retryAfter} seconds.`
-					: 'Rate limit exceeded. Please try again later.';
-				
-				vscode.window.showWarningMessage(retryMessage);
-				
-				return reject(new Error(`Rate limit exceeded. ${retryMessage}`));
+			// Handle 403 Forbidden (likely token limit exceeded)
+			if (res.statusCode === 403) {
+				// Try to get error details from response body
+				let errorData = '';
+				res.on('data', (chunk: any) => {
+					errorData += chunk;
+				});
+				res.on('end', () => {
+					try {
+						const errorResponse = JSON.parse(errorData);
+						const errorMessage = errorResponse.detail || 'Token limit exceeded. Please check your API key quota.';
+						vscode.window.showErrorMessage(errorMessage);
+						return reject(new Error(errorMessage));
+					} catch (e) {
+						const errorMessage = 'Token limit exceeded. Please check your API key quota.';
+						vscode.window.showErrorMessage(errorMessage);
+						return reject(new Error(errorMessage));
+					}
+				});
+				return; // Don't continue processing
 			}
 
 			// Handle other HTTP status errors
 			if (res.statusCode < 200 || res.statusCode >= 300) {
-				return reject(new Error(`API responded with status code ${res.statusCode}`));
+				// Try to get error details from response body
+				let errorData = '';
+				res.on('data', (chunk: any) => {
+					errorData += chunk;
+				});
+				res.on('end', () => {
+					try {
+						const errorResponse = JSON.parse(errorData);
+						const errorMessage = errorResponse.detail || `API responded with status code ${res.statusCode}`;
+						vscode.window.showErrorMessage(errorMessage);
+						return reject(new Error(errorMessage));
+					} catch (e) {
+						const errorMessage = `API responded with status code ${res.statusCode}`;
+						vscode.window.showErrorMessage(errorMessage);
+						return reject(new Error(errorMessage));
+					}
+				});
+				return; // Don't continue processing
 			}
 
 			res.on('data', (chunk: any) => {
@@ -1427,13 +1428,93 @@ async function extractDependenciesInternal(code: string, round: number): Promise
 }
 
 /**
- * Extract dependencies from code by making an API call (with retry logic)
+ * Extract dependencies from code by making an API call
  * @param code The code to analyze
  * @param round The round number (starting from 1)
  * @returns Object containing dependencies array and done flag
  */
 async function extractDependencies(code: string, round: number): Promise<ExtractResponse> {
 	return await makeRequestWithRetry(() => extractDependenciesInternal(code, round));
+}
+
+/**
+ * Internal function to check token usage
+ * @returns Token usage information
+ */
+async function checkTokenUsageInternal(): Promise<TokenUsageResponse> {
+	// Get the full API URL for token usage endpoint
+	const apiUrl = `${apiBaseUrl}/my-token-usage`;
+
+	return new Promise((resolve, reject) => {
+		// Parse URL to determine if http or https should be used
+		const isHttps = apiUrl.startsWith('https');
+		const http = isHttps ? require('https') : require('http');
+		const urlObj = new URL(apiUrl);
+
+		const options = {
+			hostname: urlObj.hostname,
+			port: urlObj.port || (isHttps ? 443 : 80),
+			path: urlObj.pathname,
+			method: 'GET',
+			headers: {
+				'X-API-Key': getCurrentApiKey()
+			}
+		};
+
+		const req = http.request(options, (res: any) => {
+			let data = '';
+
+			// Handle HTTP status errors
+			if (res.statusCode < 200 || res.statusCode >= 300) {
+				let errorData = '';
+				res.on('data', (chunk: any) => {
+					errorData += chunk;
+				});
+				res.on('end', () => {
+					try {
+						const errorResponse = JSON.parse(errorData);
+						let errorMessage = errorResponse.detail || `API responded with status code ${res.statusCode}`;
+
+						// Handle specific 404 error for API key not found
+						if (res.statusCode === 404) {
+							errorMessage = 'API key not found. Please check your API key configuration.';
+						}
+
+						return reject(new Error(errorMessage));
+					} catch (e) {
+						let errorMessage = `API responded with status code ${res.statusCode}`;
+
+						// Handle specific 404 error for API key not found
+						if (res.statusCode === 404) {
+							errorMessage = 'API key not found. Please check your API key configuration.';
+						}
+
+						return reject(new Error(errorMessage));
+					}
+				});
+				return;
+			}
+
+			res.on('data', (chunk: any) => {
+				data += chunk;
+			});
+
+			res.on('end', () => {
+				try {
+					const response = JSON.parse(data);
+					resolve(response);
+				} catch (e) {
+					reject(new Error(`Failed to parse API response: ${e}`));
+				}
+			});
+		});
+
+		req.on('error', (error: any) => {
+			reject(new Error(`API request failed: ${error.message}`));
+		});
+
+		req.end();
+	});
 }
 
 /**
@@ -1536,4 +1617,5 @@ async function showFunctionDetails(documentUri: string, line: number, result: An
 	// Show the detailed explanation
 	showDetailedExplanation();
 }
+
 
