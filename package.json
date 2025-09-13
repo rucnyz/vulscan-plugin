@@ -97,9 +97,9 @@
                 "vulscan.apiKey": {
                     "type": "string",
                     "default": "",
-                    "description": "Your VirtueAI API key for vulnerability scanning.",
+                    "description": "Your VirtueAI API key. Get your API key by booking a demo: https://meetings.hubspot.com/shekhar-bapat.",
                     "order": 10,
-                    "markdownDescription": "Your VirtueAI API key for vulnerability scanning. [Check Usage](command:vulscan.checkTokenUsage)"
+                    "markdownDescription": "[Check Usage](command:vulscan.checkTokenUsage)\n\nYour VirtueAI API key. Get your API key by [booking a demo](https://meetings.hubspot.com/shekhar-bapat)."
                 }
             }
         }
