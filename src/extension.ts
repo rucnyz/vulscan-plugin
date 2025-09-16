@@ -293,7 +293,7 @@ ${selectedText}
 
 				console.log('Analyzing code with implementations included');
 				// const result = mockResult; // Use mock result
-				const result = await analyzeCodeForVulnerabilities(codeToAnalyze);
+				const result = await analyzeCodeForVulnerabilities(codeToAnalyze, editor.document.languageId);
 				const pred = result.result;
 				lastAnalysisResult = pred; // Store for detailed explanation
 				const decorationType = getDecorationForResult(pred);
@@ -717,9 +717,10 @@ async function makeRequestWithRetry<T>(
 /**
  * Internal function to make vulnerability analysis request
  * @param code The code to analyze
+ * @param languageId The programming language identifier
  * @returns Analysis result
  */
-async function analyzeCodeForVulnerabilitiesInternal(code: string): Promise<AnalysisResult> {
+async function analyzeCodeForVulnerabilitiesInternal(code: string, languageId: string): Promise<AnalysisResult> {
 	// Get the full API URL for analyze endpoint
 	const apiUrl = `${apiBaseUrl}/analyze`;
 
@@ -807,8 +808,8 @@ async function analyzeCodeForVulnerabilitiesInternal(code: string): Promise<Anal
 			reject(new Error(`API request failed: ${error.message}`));
 		});
 
-		// Send the code and model to analyze
-		const requestBody = JSON.stringify({ code, model: selectedModel });
+		// Send the code, model, and language to analyze
+		const requestBody = JSON.stringify({ code, model: selectedModel, language: languageId });
 		req.write(requestBody);
 		req.end();
 	});
@@ -817,10 +818,11 @@ async function analyzeCodeForVulnerabilitiesInternal(code: string): Promise<Anal
 /**
  * Send the code to an API for vulnerability analysis
  * @param code The code to analyze
+ * @param languageId The programming language identifier
  * @returns Analysis result
  */
-async function analyzeCodeForVulnerabilities(code: string): Promise<AnalysisResult> {
-	return await makeRequestWithRetry(() => analyzeCodeForVulnerabilitiesInternal(code));
+async function analyzeCodeForVulnerabilities(code: string, languageId: string): Promise<AnalysisResult> {
+	return await makeRequestWithRetry(() => analyzeCodeForVulnerabilitiesInternal(code, languageId));
 }
 
 /**
@@ -1185,7 +1187,7 @@ async function analyzeDocumentOnSave(document: vscode.TextDocument): Promise<voi
 				analysisPromises.push({
 					// Only create a real promise if we need to analyze
 					promise: shouldAnalyze
-						? analyzeCodeForVulnerabilities(functionCode)
+						? analyzeCodeForVulnerabilities(functionCode, document.languageId)
 						: Promise.resolve({
 							result: existingResult?.result || { status: VulnerabilityStatus.Benign },
 							status: 'success'
