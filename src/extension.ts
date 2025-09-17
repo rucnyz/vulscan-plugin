@@ -967,16 +967,20 @@ function getWebviewContent(result: AnalysisResponse): string {
                     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
                     padding: 20px;
                     line-height: 1.6;
+                    color: var(--vscode-foreground);
+                    background-color: var(--vscode-editor-background);
                 }
                 h1 {
-                    border-bottom: 1px solid #eaecef;
+                    border-bottom: 1px solid var(--vscode-panel-border);
                     padding-bottom: 10px;
                     margin-bottom: 20px;
+                    color: var(--vscode-foreground);
                 }
                 h2 {
                     margin-top: 24px;
                     margin-bottom: 16px;
                     font-weight: 600;
+                    color: var(--vscode-foreground);
                 }
                 .status {
                     font-weight: bold;
@@ -985,44 +989,65 @@ function getWebviewContent(result: AnalysisResponse): string {
                     ${statusStyle}
                 }
                 .explanation {
-                    background-color: #f6f8fa;
+                    background-color: var(--vscode-textBlockQuote-background);
+                    border: 1px solid var(--vscode-panel-border);
                     border-radius: 3px;
                     padding: 16px;
+                    color: var(--vscode-foreground);
                 }
                 pre {
-                    background-color: #f3f3f3;
+                    background-color: var(--vscode-textPreformat-background);
+                    border: 1px solid var(--vscode-panel-border);
                     padding: 10px;
                     border-radius: 3px;
                     overflow-x: auto;
+                    color: var(--vscode-foreground);
                 }
                 code {
-                    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+                    font-family: var(--vscode-editor-font-family);
                     font-size: 0.9em;
+                    background-color: var(--vscode-textPreformat-background);
+                    padding: 1px 3px;
+                    border-radius: 3px;
+                    color: var(--vscode-foreground);
                 }
                 blockquote {
-                    border-left: 4px solid #ddd;
+                    border-left: 4px solid var(--vscode-textBlockQuote-border);
                     padding-left: 16px;
                     margin-left: 0;
-                    color: #555;
+                    color: var(--vscode-foreground);
+                    background-color: var(--vscode-textBlockQuote-background);
                 }
                 ul {
                     padding-left: 20px;
                 }
                 li {
                     margin-bottom: 8px;
+                    color: var(--vscode-foreground);
                 }
                 a {
-                    color: #0366d6;
+                    color: var(--vscode-textLink-foreground);
                     text-decoration: none;
                 }
                 a:hover {
                     text-decoration: underline;
+                    color: var(--vscode-textLink-activeForeground);
                 }
                 .function-ref {
-                    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
-                    background-color: #f3f3f3;
+                    font-family: var(--vscode-editor-font-family);
+                    background-color: var(--vscode-textPreformat-background);
                     padding: 2px 4px;
                     border-radius: 3px;
+                    color: var(--vscode-foreground);
+                }
+                p {
+                    color: var(--vscode-foreground);
+                }
+                strong {
+                    color: var(--vscode-foreground);
+                }
+                em {
+                    color: var(--vscode-foreground);
                 }
             </style>
             <!-- Include markdown-it for rendering -->
