@@ -66,7 +66,10 @@ async function analyzeCodeForVulnerabilitiesInternal(
 	languageId: string,
 	apiBaseUrl: string,
 	selectedModel: string,
-	apiKey: string
+	apiKey: string,
+	filePath?: string,
+	startLine?: number,
+	endLine?: number
 ): Promise<AnalysisResult> {
 	// Get the full API URL for analyze endpoint
 	const apiUrl = `${apiBaseUrl}/analyze`;
@@ -155,8 +158,15 @@ async function analyzeCodeForVulnerabilitiesInternal(
 			reject(new Error(`API request failed: ${error.message}`));
 		});
 
-		// Send the code, model, and language to analyze
-		const requestBody = JSON.stringify({ code, model: selectedModel, language: languageId });
+		// Send the code, model, language, and location information to analyze
+		const requestBody = JSON.stringify({
+			code,
+			model: selectedModel,
+			language: languageId,
+			filePath: filePath,
+			startLine: startLine,
+			endLine: endLine
+		});
 		req.write(requestBody);
 		req.end();
 	});
@@ -176,10 +186,13 @@ export async function analyzeCodeForVulnerabilities(
 	languageId: string,
 	apiBaseUrl: string,
 	selectedModel: string,
-	apiKey: string
+	apiKey: string,
+	filePath?: string,
+	startLine?: number,
+	endLine?: number
 ): Promise<AnalysisResult> {
 	return await makeRequestWithRetry(() =>
-		analyzeCodeForVulnerabilitiesInternal(code, languageId, apiBaseUrl, selectedModel, apiKey)
+		analyzeCodeForVulnerabilitiesInternal(code, languageId, apiBaseUrl, selectedModel, apiKey, filePath, startLine, endLine)
 	);
 }
 

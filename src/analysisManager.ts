@@ -162,7 +162,16 @@ export async function analyzeDocumentOnSave(
 				analysisPromises.push({
 					// Only create a real promise if we need to analyze
 					promise: shouldAnalyze
-						? analyzeCodeForVulnerabilities(functionCode, document.languageId, apiBaseUrl, selectedModel, apiKey)
+						? analyzeCodeForVulnerabilities(
+							functionCode,
+							document.languageId,
+							apiBaseUrl,
+							selectedModel,
+							apiKey,
+							vscode.workspace.asRelativePath(document.uri.fsPath),
+							functionSymbol.range.start.line + 1, // Convert to 1-based line numbering
+							functionSymbol.range.end.line + 1 // Convert to 1-based line numbering
+						)
 						: Promise.resolve({
 							result: existingResult?.result || { status: VulnerabilityStatus.Benign },
 							status: 'success'

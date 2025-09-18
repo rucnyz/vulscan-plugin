@@ -92,7 +92,7 @@ async function makeRequestWithRetry<T>(
  * @param apiKey The API key for authentication
  * @returns EU AI Act analysis result
  */
-async function analyzeCodeForEUAIActInternal(code: string, apiBaseUrl: string, selectedModel: string, apiKey: string): Promise<EUAIActAnalysisResult> {
+async function analyzeCodeForEUAIActInternal(code: string, apiBaseUrl: string, selectedModel: string, apiKey: string, filePath?: string, startLine?: number, endLine?: number): Promise<EUAIActAnalysisResult> {
 	// Get the full API URL for EU AI Act analyze endpoint
 	const apiUrl = `${apiBaseUrl}/analyze-eu-ai-act`;
 
@@ -155,8 +155,14 @@ async function analyzeCodeForEUAIActInternal(code: string, apiBaseUrl: string, s
 			reject(new Error(`API request failed: ${error.message}`));
 		});
 
-		// Send the code and model to analyze
-		const requestBody = JSON.stringify({ code, model: selectedModel });
+		// Send the code, model, and location information to analyze
+		const requestBody = JSON.stringify({
+			code,
+			model: selectedModel,
+			filePath: filePath,
+			startLine: startLine,
+			endLine: endLine
+		});
 		req.write(requestBody);
 		req.end();
 	});
@@ -170,8 +176,8 @@ async function analyzeCodeForEUAIActInternal(code: string, apiBaseUrl: string, s
  * @param apiKey The API key for authentication
  * @returns EU AI Act analysis result
  */
-export async function analyzeCodeForEUAIAct(code: string, apiBaseUrl: string, selectedModel: string, apiKey: string): Promise<EUAIActAnalysisResult> {
-	return await makeRequestWithRetry(() => analyzeCodeForEUAIActInternal(code, apiBaseUrl, selectedModel, apiKey));
+export async function analyzeCodeForEUAIAct(code: string, apiBaseUrl: string, selectedModel: string, apiKey: string, filePath?: string, startLine?: number, endLine?: number): Promise<EUAIActAnalysisResult> {
+	return await makeRequestWithRetry(() => analyzeCodeForEUAIActInternal(code, apiBaseUrl, selectedModel, apiKey, filePath, startLine, endLine));
 }
 
 /**

@@ -258,7 +258,16 @@ ${selectedText}
 
 				console.log('Analyzing code with implementations included');
 				// const result = mockResult; // Use mock result
-				const result = await analyzeCodeForVulnerabilities(codeToAnalyze, editor.document.languageId, apiBaseUrl, selectedModel, getCurrentApiKey());
+				const result = await analyzeCodeForVulnerabilities(
+					codeToAnalyze,
+					editor.document.languageId,
+					apiBaseUrl,
+					selectedModel,
+					getCurrentApiKey(),
+					vscode.workspace.asRelativePath(editor.document.uri.fsPath),
+					selection.start.line + 1, // Convert to 1-based line numbering
+					selection.end.line + 1 // Convert to 1-based line numbering
+				);
 				const pred = result.result;
 				setLastAnalysisResult(pred); // Store for detailed explanation
 				const decorationType = getDecorationForResult(pred);
@@ -370,7 +379,15 @@ ${implementationsText}
 ${selectedText}
 `;
 
-				const result = await analyzeCodeForEUAIAct(codeToAnalyze, apiBaseUrl, selectedModel, getCurrentApiKey());
+				const result = await analyzeCodeForEUAIAct(
+					codeToAnalyze,
+					apiBaseUrl,
+					selectedModel,
+					getCurrentApiKey(),
+					editor.document.uri.fsPath,
+					selection.start.line + 1, // Convert to 1-based line numbering
+					selection.end.line + 1 // Convert to 1-based line numbering
+				);
 				const pred = result.result;
 
 				const decorationType = getEUAIActDecorationForResult(pred, []);
