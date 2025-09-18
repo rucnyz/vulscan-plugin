@@ -1,11 +1,7 @@
 import * as vscode from 'vscode';
 import { AnalysisResponse, VulnerabilityStatus } from './apiService';
-import { EUAIActAnalysisResponse, EUAIActViolationStatus, getEUAIActDecorationForResult } from './euaiact';
+import { EUAIActViolationStatus, getEUAIActDecorationForResult } from './euaiact';
 import {
-	documentAnalysisResults,
-	documentEUAIActResults,
-	FunctionAnalysisResult,
-	FunctionEUAIActResult,
 	getAnalysisResults,
 	getEUAIActResults
 } from './analysisManager';

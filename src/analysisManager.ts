@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { AnalysisResponse, VulnerabilityStatus, analyzeCodeForVulnerabilities, AnalysisResult } from './apiService';
-import { EUAIActAnalysisResponse, EUAIActViolationStatus } from './euaiact';
+import { EUAIActAnalysisResponse } from './euaiact';
 
 // Store analysis results by function/method
 export interface FunctionAnalysisResult {
