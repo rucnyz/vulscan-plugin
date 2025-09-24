@@ -7,6 +7,7 @@ export interface FunctionAnalysisResult {
 	functionSymbol: vscode.DocumentSymbol;
 	result: AnalysisResponse;
 	codeHash: string; // Add this field to track code changes
+	model: string; // Add this field to track which model was used
 }
 
 // EU AI Act analysis result
@@ -14,6 +15,7 @@ export interface FunctionEUAIActResult {
 	functionSymbol: vscode.DocumentSymbol;
 	result: EUAIActAnalysisResponse;
 	codeHash: string;
+	model: string; // Add this field to track which model was used
 }
 
 // Map to store analysis results by document URI
@@ -137,10 +139,11 @@ export async function analyzeDocumentOnSave(
 				// Generate a hash of the function code to detect changes
 				const codeHash = generateCodeHash(functionCode);
 
-				// Check if we already have a result for this function with the same hash
+				// Check if we already have a result for this function with the same hash and model
 				const existingResult = currentResults.find(r =>
 					r.functionSymbol.name === functionSymbol.name &&
-					r.codeHash === codeHash
+					r.codeHash === codeHash &&
+					r.model === selectedModel
 				);
 
 				// Determine if we need to analyze this function
@@ -204,11 +207,12 @@ export async function analyzeDocumentOnSave(
 
 					// If we've analyzed this function, create a new result object
 					if (item.shouldAnalyze) {
-						// Create the analysis result object with code hash
+						// Create the analysis result object with code hash and model
 						const analysisResult = {
 							functionSymbol: item.functionSymbol,
 							result: result.result,
-							codeHash: item.codeHash
+							codeHash: item.codeHash,
+							model: selectedModel
 						};
 
 						// Update the stored analysis results immediately
