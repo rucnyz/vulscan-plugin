@@ -258,9 +258,15 @@ export async function analyzeDocumentOnSave(
 		});
 
 		// Refresh decorations after progress completes to ensure they are visible
-		setTimeout(() => {
-			refreshDecorations(editor);
-		}, 100);
+		// Get the current active editor in case the user switched files during analysis
+		const currentEditor = vscode.window.visibleTextEditors.find(e => e.document.uri.toString() === document.uri.toString());
+		if (currentEditor) {
+			setTimeout(() => {
+				refreshDecorations(currentEditor);
+			}, 100);
+		} else {
+			console.log('Editor is no longer visible, decorations will be applied when user returns to this file');
+		}
 
 		// Show final notification about analysis results
 		if (vulnerableFunctionsCount > 0) {

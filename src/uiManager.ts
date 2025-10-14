@@ -12,6 +12,37 @@ let activeDecorations: vscode.TextEditorDecorationType[] = [];
 // Store the latest analysis result for showing detailed explanation
 let lastAnalysisResult: AnalysisResponse | null = null;
 
+// Store manual analysis decorations by document URI
+// This stores decorations from manual code selection analysis (not auto-save analysis)
+interface ManualDecoration {
+	range: vscode.Range;
+	result: AnalysisResponse;
+}
+const manualDecorations = new Map<string, ManualDecoration[]>();
+
+/**
+ * Save a manual analysis decoration for later restoration
+ * @param documentUri The document URI
+ * @param range The range of the decoration
+ * @param result The analysis result
+ */
+export function saveManualDecoration(documentUri: string, range: vscode.Range, result: AnalysisResponse) {
+	if (!manualDecorations.has(documentUri)) {
+		manualDecorations.set(documentUri, []);
+	}
+	const decorations = manualDecorations.get(documentUri)!;
+	
+	// Check if there's already a decoration for this range
+	const existingIndex = decorations.findIndex(d => d.range.isEqual(range));
+	if (existingIndex >= 0) {
+		// Update existing decoration
+		decorations[existingIndex] = { range, result };
+	} else {
+		// Add new decoration
+		decorations.push({ range, result });
+	}
+}
+
 /**
  * Clear all active decorations
  */
@@ -20,6 +51,8 @@ export function clearAllDecorations() {
 		decoration.dispose();
 	});
 	activeDecorations = [];
+	// Also clear manual decorations
+	manualDecorations.clear();
 }
 
 /**
@@ -59,6 +92,7 @@ export function refreshDecorations(editor: vscode.TextEditor) {
 	const documentUri = editor.document.uri.toString();
 	const analysisResults = getAnalysisResults(documentUri);
 	const euAIActResults = getEUAIActResults(documentUri);
+	const manualDecorationsList = manualDecorations.get(documentUri) || [];
 
 	// Clear existing decorations for this editor first
 	const editorDecorations = activeDecorations.slice();
@@ -66,7 +100,7 @@ export function refreshDecorations(editor: vscode.TextEditor) {
 		editor.setDecorations(decoration, []);
 	});
 
-	// Reapply vulnerability decorations based on stored results
+	// Reapply vulnerability decorations based on stored results (from auto-save analysis)
 	for (const analysisResult of analysisResults) {
 		const { functionSymbol, result } = analysisResult;
 
@@ -86,6 +120,13 @@ export function refreshDecorations(editor: vscode.TextEditor) {
 			const decorationType = getEUAIActDecorationForResult(result, activeDecorations);
 			editor.setDecorations(decorationType, [functionSymbol.range]);
 		}
+	}
+
+	// Reapply manual analysis decorations (from manual code selection analysis)
+	for (const manualDecoration of manualDecorationsList) {
+		const { range, result } = manualDecoration;
+		const decorationType = getDecorationForResult(result);
+		editor.setDecorations(decorationType, [range]);
 	}
 }
 
