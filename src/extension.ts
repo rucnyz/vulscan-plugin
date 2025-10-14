@@ -25,7 +25,8 @@ import {
 	showDetailedExplanation,
 	VulnerabilityScanCodeLensProvider,
 	showFunctionDetails,
-	setLastAnalysisResult
+	setLastAnalysisResult,
+	saveManualDecoration
 } from './uiManager';
 
 // Import interfaces from apiService
@@ -274,14 +275,17 @@ ${selectedText}
 
 				editor.setDecorations(decorationType, [selection]);
 
+				// Save the manual decoration for later restoration when switching files
+				saveManualDecoration(editor.document.uri.toString(), selection, pred);
+
 				// Display the result with a button for detailed explanation
 				if (pred.status === VulnerabilityStatus.Vulnerable) {
 					vscode.window.showErrorMessage(
 						`Vulnerability detected: ${pred.cweType}`,
 						{ modal: false },
 						'Show Details'
-					).then(selection => {
-						if (selection === 'Show Details') {
+					).then(userSelection => {
+						if (userSelection === 'Show Details') {
 							showDetailedExplanation();
 						}
 					});
@@ -290,8 +294,8 @@ ${selectedText}
 						'Code appears to be benign',
 						{ modal: false },
 						'Show Details'
-					).then(selection => {
-						if (selection === 'Show Details') {
+					).then(userSelection => {
+						if (userSelection === 'Show Details') {
 							showDetailedExplanation();
 						}
 					});
@@ -505,6 +509,17 @@ ${selectedText}
 	});
 
 
+	// Listen for active text editor changes to refresh decorations
+	const onDidChangeActiveTextEditor = vscode.window.onDidChangeActiveTextEditor((editor) => {
+		if (editor) {
+			console.log(`Active editor changed to: ${editor.document.fileName}`);
+			// Refresh decorations for the newly active editor
+			// This ensures that if analysis was completed while the user was viewing another file,
+			// decorations will be applied when they return to this file
+			refreshDecorations(editor);
+		}
+	});
+
 	// Listen for configuration changes
 	const configListener = vscode.workspace.onDidChangeConfiguration((e) => {
 		if (e.affectsConfiguration('vulscan.autoAnalyzeOnSave')) {
@@ -554,6 +569,7 @@ ${selectedText}
 		selectModelCommand,
 		openApiKeySettingsCommand,
 		checkTokenUsageCommand,
+		onDidChangeActiveTextEditor,
 		configListener
 	);
 
