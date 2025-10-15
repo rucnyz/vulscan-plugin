@@ -111,7 +111,6 @@ async function analyzeCodeForEUAIActInternal(code: string, apiBaseUrl: string, s
 			headers: {
 				'Content-Type': 'application/json',
 				'Authorization': `Bearer ${apiKey}`,
-				'X-API-Key': apiKey
 			}
 		};
 

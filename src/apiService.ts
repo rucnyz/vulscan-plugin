@@ -89,7 +89,6 @@ async function analyzeCodeForVulnerabilitiesInternal(
 			headers: {
 				'Content-Type': 'application/json',
 				'Authorization': `Bearer ${apiKey}`,
-				'X-API-Key': apiKey
 			}
 		};
 
@@ -229,7 +228,6 @@ async function extractDependenciesInternal(
 			headers: {
 				'Content-Type': 'application/json',
 				'Authorization': `Bearer ${apiKey}`,
-				'X-API-Key': apiKey
 			}
 		};
 
@@ -361,7 +359,8 @@ async function checkTokenUsageInternal(apiBaseUrl: string, apiKey: string): Prom
 			path: urlObj.pathname,
 			method: 'GET',
 			headers: {
-				'X-API-Key': apiKey
+				'Content-Type': 'application/json',
+				'Authorization': `Bearer ${apiKey}`,
 			}
 		};
 
