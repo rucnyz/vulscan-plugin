@@ -52,6 +52,31 @@ export async function getDocumentSymbols(document: vscode.TextDocument): Promise
 }
 
 /**
+ * List of supported programming language IDs for automatic analysis
+ */
+const SUPPORTED_LANGUAGES = [
+	'c', 'cpp', 'csharp', 'cuda-cpp',
+	'go',
+	'java', 'javascript', 'javascriptreact',
+	'kotlin',
+	'objective-c', 'objective-cpp',
+	'php', 'python',
+	'ruby', 'rust',
+	'scala', 'swift',
+	'typescript', 'typescriptreact',
+	'solidity',
+	'dart',
+	'perl',
+	'haskell',
+	'elixir',
+	'clojure',
+	'fsharp',
+	'lua',
+	'groovy',
+	'shell', 'shellscript', 'bash', 'zsh', 'powershell'
+];
+
+/**
  * Analyzes the entire document or code chunks when a file is saved
  * @param document The document that was saved
  * @param apiBaseUrl The API base URL
@@ -68,6 +93,13 @@ export async function analyzeDocumentOnSave(
 	clearAllDecorations: () => void,
 	refreshDecorations: (editor: vscode.TextEditor) => void
 ): Promise<void> {
+	// Check if the document language is supported for analysis
+	const languageId = document.languageId.toLowerCase();
+	if (!SUPPORTED_LANGUAGES.includes(languageId)) {
+		console.log(`Skipping analysis for unsupported language: ${languageId}`);
+		return;
+	}
+
 	// Find the editor for this document
 	const editor = vscode.window.visibleTextEditors.find(editor => editor.document.uri === document.uri);
 	if (!editor) {
@@ -75,7 +107,7 @@ export async function analyzeDocumentOnSave(
 		return;
 	}
 
-	console.log(`Analyzing saved document: ${document.fileName}`);
+	console.log(`Analyzing saved document: ${document.fileName} (language: ${languageId})`);
 
 	// Clear previous decorations first
 	clearAllDecorations();
