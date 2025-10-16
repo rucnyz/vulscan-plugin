@@ -68,7 +68,7 @@
             "properties": {
                 "vulscan.apiBaseUrl": {
                     "type": "string",
-                    "default": "https://api.virtueai.io/api/vulscan",
+                    "default": "http://guard-code-backend.staging.virtueai.io",
                     "description": "Base URL for the vulnerability analysis API endpoints.",
                     "order": 1
                 },

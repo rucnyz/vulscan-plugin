@@ -35,9 +35,6 @@ import {
 
 // Import from analysisManager
 
-// Define a global API base URL
-let apiBaseUrl: string = "https://api.virtueai.io/api/vulscan";
-
 // Store the selected model
 let selectedModel: string = "virtueguard-code";
 
@@ -64,7 +61,7 @@ export function setApiKeyForTesting(key: string) {
 export function activate(context: vscode.ExtensionContext) {
 	// Get API base URL, model, and API key from configuration
 	const config = vscode.workspace.getConfiguration('vulscan');
-	apiBaseUrl = config.get('apiBaseUrl') as string || apiBaseUrl;
+	let apiBaseUrl = config.get('apiBaseUrl') as string;
 	selectedModel = config.get('selectedModel') as string || 'virtueguard-code';
 	apiKey = config.get('apiKey') as string || "";
 
