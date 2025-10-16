@@ -54,7 +54,7 @@ export async function getDocumentSymbols(document: vscode.TextDocument): Promise
 /**
  * List of supported programming language IDs for automatic analysis
  */
-const SUPPORTED_LANGUAGES = [
+const supportedLanguages = [
 	'c', 'cpp', 'csharp', 'cuda-cpp',
 	'go',
 	'java', 'javascript', 'javascriptreact',
@@ -83,6 +83,7 @@ const SUPPORTED_LANGUAGES = [
  * @param selectedModel The model to use
  * @param apiKey The API key
  * @param getDecorationForResult Function to get decoration for result
+ * @param codeLensProvider CodeLens provider to refresh after analysis
  */
 export async function analyzeDocumentOnSave(
 	document: vscode.TextDocument,
@@ -91,11 +92,12 @@ export async function analyzeDocumentOnSave(
 	apiKey: string,
 	getDecorationForResult: (result: AnalysisResponse) => vscode.TextEditorDecorationType,
 	clearAllDecorations: () => void,
-	refreshDecorations: (editor: vscode.TextEditor) => void
+	refreshDecorations: (editor: vscode.TextEditor) => void,
+	codeLensProvider: { refresh: () => void } | null = null
 ): Promise<void> {
 	// Check if the document language is supported for analysis
 	const languageId = document.languageId.toLowerCase();
-	if (!SUPPORTED_LANGUAGES.includes(languageId)) {
+	if (!supportedLanguages.includes(languageId)) {
 		console.log(`Skipping analysis for unsupported language: ${languageId}`);
 		return;
 	}
@@ -300,6 +302,14 @@ export async function analyzeDocumentOnSave(
 			console.log('Editor is no longer visible, decorations will be applied when user returns to this file');
 		}
 
+		// Refresh CodeLens to show vulnerability status indicators above functions
+		if (codeLensProvider) {
+			setTimeout(() => {
+				codeLensProvider.refresh();
+				console.log('CodeLens refreshed after analysis completion');
+			}, 150);
+		}
+
 		// Show final notification about analysis results
 		if (vulnerableFunctionsCount > 0) {
 			// Show notification with count of vulnerable functions
@@ -323,6 +333,14 @@ export async function analyzeDocumentOnSave(
 export function clearAnalysisResults(documentUri: string): void {
 	documentAnalysisResults.delete(documentUri);
 	documentEUAIActResults.delete(documentUri);
+}
+
+/**
+ * Clear all analysis results for all documents
+ */
+export function clearAllAnalysisResults(): void {
+	documentAnalysisResults.clear();
+	documentEUAIActResults.clear();
 }
 
 /**

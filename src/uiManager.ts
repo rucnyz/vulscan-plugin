@@ -3,7 +3,8 @@ import { AnalysisResponse, VulnerabilityStatus } from './apiService';
 import { EUAIActViolationStatus, getEUAIActDecorationForResult } from './euaiact';
 import {
 	getAnalysisResults,
-	getEUAIActResults
+	getEUAIActResults,
+	clearAllAnalysisResults
 } from './analysisManager';
 
 // Track active decorations
@@ -11,6 +12,9 @@ let activeDecorations: vscode.TextEditorDecorationType[] = [];
 
 // Store the latest analysis result for showing detailed explanation
 let lastAnalysisResult: AnalysisResponse | null = null;
+
+// Store CodeLens provider reference for refreshing
+let codeLensProviderRef: VulnerabilityScanCodeLensProvider | null = null;
 
 // Store manual analysis decorations by document URI
 // This stores decorations from manual code selection analysis (not auto-save analysis)
@@ -81,15 +85,36 @@ export function saveManualDecoration(documentUri: string, range: vscode.Range, r
 }
 
 /**
- * Clear all active decorations
+ * Set the CodeLens provider reference for later use
+ * @param provider The CodeLens provider instance
+ */
+export function setCodeLensProvider(provider: VulnerabilityScanCodeLensProvider) {
+	codeLensProviderRef = provider;
+}
+
+/**
+ * Clear all active decorations and analysis results
  */
 export function clearAllDecorations() {
+	// Dispose all visual decorations
 	activeDecorations.forEach(decoration => {
 		decoration.dispose();
 	});
 	activeDecorations = [];
-	// Also clear manual decorations
+	
+	// Clear manual decorations
 	manualDecorations.clear();
+	
+	// Clear all stored analysis results (auto-save analysis)
+	clearAllAnalysisResults();
+	
+	// Refresh CodeLens to remove vulnerability/benign indicators
+	if (codeLensProviderRef) {
+		codeLensProviderRef.refresh();
+		console.log('CodeLens refreshed after clearing all decorations');
+	}
+	
+	console.log('All decorations and analysis results cleared');
 }
 
 /**
@@ -395,17 +420,19 @@ export class VulnerabilityScanCodeLensProvider implements vscode.CodeLensProvide
 	public readonly onDidChangeCodeLenses: vscode.Event<void> = this._onDidChangeCodeLenses.event;
 
 	constructor() {
-		// Refresh CodeLenses when analysis results change
-		const refreshCodeLenses = () => {
-			this._onDidChangeCodeLenses.fire();
-		};
-
 		// Trigger refresh when configuration changes
 		vscode.workspace.onDidChangeConfiguration(e => {
 			if (e.affectsConfiguration('vulscan')) {
-				refreshCodeLenses();
+				this.refresh();
 			}
 		});
+	}
+
+	/**
+	 * Manually trigger a CodeLens refresh
+	 */
+	public refresh(): void {
+		this._onDidChangeCodeLenses.fire();
 	}
 
 	public provideCodeLenses(document: vscode.TextDocument): vscode.ProviderResult<vscode.CodeLens[]> {

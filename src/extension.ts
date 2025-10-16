@@ -27,7 +27,8 @@ import {
 	showFunctionDetails,
 	setLastAnalysisResult,
 	saveManualDecoration,
-	clearManualDecorationsForRange
+	clearManualDecorationsForRange,
+	setCodeLensProvider
 } from './uiManager';
 
 // Import interfaces from apiService
@@ -42,6 +43,9 @@ let selectedModel: string = "virtueguard-code";
 
 // Store single API key
 let apiKey: string = "";
+
+// Store CodeLens provider reference for refreshing
+let codeLensProviderInstance: VulnerabilityScanCodeLensProvider | null = null;
 
 // Get current API key
 function getCurrentApiKey(): string {
@@ -72,6 +76,17 @@ export function activate(context: vscode.ExtensionContext) {
 	// This line of code will only be executed once when your extension is activated
 	console.log('Congratulations, your extension "vulscan" is now active!');
 
+	// Register CodeLens provider first (before onSaveListener)
+	codeLensProviderInstance = new VulnerabilityScanCodeLensProvider();
+	const codeLensProviderDisposable = vscode.languages.registerCodeLensProvider(
+		{ scheme: 'file' },
+		codeLensProviderInstance
+	);
+	context.subscriptions.push(codeLensProviderDisposable);
+	
+	// Set the CodeLens provider reference in uiManager for clearing
+	setCodeLensProvider(codeLensProviderInstance);
+
 	// Register document save event listener for automatic analysis
 	// Moving this up to initialize it before other commands
 	const onSaveListener = vscode.workspace.onDidSaveTextDocument(async (document) => {
@@ -87,7 +102,16 @@ export function activate(context: vscode.ExtensionContext) {
 				vscode.window.showWarningMessage('Auto-analysis disabled: API key is required. Please add an API key using the command palette.');
 				return;
 			}
-			await analyzeDocumentOnSave(document, apiBaseUrl, selectedModel, getCurrentApiKey(), getDecorationForResult, clearAllDecorations, refreshDecorations);
+			await analyzeDocumentOnSave(
+				document, 
+				apiBaseUrl, 
+				selectedModel, 
+				getCurrentApiKey(), 
+				getDecorationForResult, 
+				clearAllDecorations, 
+				refreshDecorations,
+				codeLensProviderInstance
+			);
 		}
 	});
 
@@ -609,16 +633,6 @@ ${selectedText}
 			console.log('Auto-analyze feature activated with current editor');
 		}
 	}
-
-	// Register CodeLens provider
-	const codeLensProvider = new VulnerabilityScanCodeLensProvider();
-	const codeLensProviderDisposable = vscode.languages.registerCodeLensProvider(
-		{ scheme: 'file' },
-		codeLensProvider
-	);
-
-	// Add CodeLens provider to subscriptions
-	context.subscriptions.push(codeLensProviderDisposable);
 
 	// Register command to show function details from CodeLens
 	const showFunctionDetailsCommand = vscode.commands.registerCommand(
