@@ -3,7 +3,7 @@
     "name": "virtueguard-code",
     "displayName": "VirtueGuard-Code",
     "description": "A VSCode extension that scans code for vulnerabilities",
-    "version": "0.1.7",
+    "version": "0.1.8",
     "publisher": "virtueai",
     "repository": {
         "type": "git",
