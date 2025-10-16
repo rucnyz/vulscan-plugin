@@ -26,7 +26,8 @@ import {
 	VulnerabilityScanCodeLensProvider,
 	showFunctionDetails,
 	setLastAnalysisResult,
-	saveManualDecoration
+	saveManualDecoration,
+	clearManualDecorationsForRange
 } from './uiManager';
 
 // Import interfaces from apiService
@@ -271,12 +272,17 @@ ${selectedText}
 				);
 				const pred = result.result;
 				setLastAnalysisResult(pred); // Store for detailed explanation
-				const decorationType = getDecorationForResult(pred);
-
-				editor.setDecorations(decorationType, [selection]);
-
-				// Save the manual decoration for later restoration when switching files
+				
+				// Clear any existing decorations for this range before applying new ones
+				// This prevents multiple decorations when scanning the same code with different models
+				clearManualDecorationsForRange(editor, selection);
+				
+				// Save the new decoration for later restoration when switching files
 				saveManualDecoration(editor.document.uri.toString(), selection, pred);
+				
+				// Refresh all decorations to ensure correct display
+				// This applies the new decoration and reapplies any other existing decorations
+				refreshDecorations(editor);
 
 				// Display the result with a button for detailed explanation
 				if (pred.status === VulnerabilityStatus.Vulnerable) {

@@ -21,6 +21,43 @@ interface ManualDecoration {
 const manualDecorations = new Map<string, ManualDecoration[]>();
 
 /**
+ * Clear manual decorations for a specific range in the active editor
+ * This removes old decorations before applying new ones to the same code
+ * @param editor The text editor
+ * @param range The range to clear decorations for
+ */
+export function clearManualDecorationsForRange(editor: vscode.TextEditor, range: vscode.Range) {
+	const documentUri = editor.document.uri.toString();
+	const decorationsList = manualDecorations.get(documentUri) || [];
+	
+	// Find decorations that overlap with this range
+	const overlappingIndices: number[] = [];
+	decorationsList.forEach((decoration, index) => {
+		if (decoration.range.isEqual(range) || decoration.range.intersection(range)) {
+			overlappingIndices.push(index);
+		}
+	});
+	
+	// Remove overlapping decorations from the list (in reverse order to maintain indices)
+	for (let i = overlappingIndices.length - 1; i >= 0; i--) {
+		decorationsList.splice(overlappingIndices[i], 1);
+	}
+	
+	// Update the map
+	if (decorationsList.length === 0) {
+		manualDecorations.delete(documentUri);
+	} else {
+		manualDecorations.set(documentUri, decorationsList);
+	}
+	
+	// Clear all active decorations for this editor to remove visual artifacts
+	// We'll reapply the remaining ones through refreshDecorations
+	activeDecorations.forEach(decoration => {
+		editor.setDecorations(decoration, []);
+	});
+}
+
+/**
  * Save a manual analysis decoration for later restoration
  * @param documentUri The document URI
  * @param range The range of the decoration
