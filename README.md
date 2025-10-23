@@ -6,11 +6,26 @@ This is the README for our extension "VirtueGuard-Code", a powerful vulnerabilit
 
 ### 1.1 API Base URL
 
-You can set the API base URL by setting the `vulscan.apiBaseUrl` in the `settings.json` file. The default URL is "http://api.virtueai.io/api/vulscan".
+You can set the API base URL by setting the `vulscan.apiBaseUrl` in the `settings.json` file. The default URL is "https://guard-code-backend.virtueai.io".
 
 ### 1.2 Auto-Analysis Settings
 
 You can enable or disable automatic analysis on file save by setting `vulscan.autoAnalyzeOnSave` to `true` or `false` in your settings.
+
+### 1.3 API Key
+
+You can set the API key by setting the `vulscan.apiKey`.
+
+To get your API key, please contact us by [booking a demo](https://meetings.hubspot.com/shekhar-bapat).
+
+### 1.4 Selected Model
+
+You can select the model to use for vulnerability analysis by setting the `vulscan.selectedModel`. The default model is "virtueguard-code".
+
+The available models are:
+- virtueguard-code
+- claude-4-sonnet
+- gpt-4.1
 
 ## 2. How to use
 
@@ -25,7 +40,6 @@ Features:
 - Real-time vulnerability detection
 - Visual indicators for vulnerable code sections
 - Detailed vulnerability reports with CWE types
-- Code improvement suggestions
 
 To enable this mode:
 1. Open VS Code settings
